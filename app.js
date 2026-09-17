@@ -648,11 +648,7 @@ function mergeInvoice(ocr, qr) {
   return d;
 }
 function applyMerged(row, d) {
-  /* 摘要 = 发票出具方公司全称 + 发票内容（如「××公司 服务费」） */
-  var sum = (d.seller || '').trim();
-  if (d.item && d.item.trim() && d.item.trim() !== sum) sum += (sum ? ' ' : '') + d.item.trim();
-  if (!sum) sum = d.type || '发票';
-  row.summary = sum;
+  /* 摘要列不自动填，保留可编辑文本框供手工录入 */
   row.amount = num(d.total);
   row.digits = amountToDigits(row.amount);
   /* 科目：专票 / 普票（按识别结果填写，可在表格手改或清空） */
@@ -811,7 +807,7 @@ async function handleFiles(fileList) {
     state.invoices.push(rec);
     var row = takeBlankRow();
     row.invId = rec.id;
-    row.summary = baseName(f.name);   // 先占行，保证报销单不为空
+    row.summary = '';   // 先占行，摘要留空供手工填写
     row.count = 1;
     jobs.push({ file: f, rec: rec, row: row, ext: ext });
   });
@@ -963,7 +959,7 @@ function renderSheet() {
     html += '<tr class="bx-row">' +
       '<td class="bx-summary" colspan="3">' +
       '<button class="bx-del screen-only" type="button" data-r="' + i + '" title="删除本行">✕</button>' +
-      '<input class="bx-in" type="text" data-r="' + i + '" data-k="summary" value="' + esc(row.summary) + '" placeholder="发票出具方公司全称 + 发票内容">' +
+      '<input class="bx-in" type="text" data-r="' + i + '" data-k="summary" value="' + esc(row.summary) + '" placeholder="摘要（可手填）">' +
       '</td>';
     var vd = visibleDigits(row.digits);
     for (var d = 0; d < 8; d++) {
@@ -1141,7 +1137,7 @@ async function retryOne(id) {
   if (!rec) return;
   if (!rec.file) { toast('原文件已不在内存中，请重新上传'); return; }
   var row = state.rows.filter(function (r) { return r.invId === id; })[0];
-  if (!row) { row = takeBlankRow(); row.invId = id; row.summary = baseName(rec.fileName); row.count = 1; }
+  if (!row) { row = takeBlankRow(); row.invId = id; row.count = 1; }
   await processOne({ file: rec.file, rec: rec, row: row, ext: rec.ext });
   toast('「' + rec.fileName + '」已重新识别');
 }
