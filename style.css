@@ -1,0 +1,189 @@
+/* 钟林 · 费用报销单系统  v2.0
+   报销单版式严格对齐 报销单_54_fee.xlsx「费用报销单」表样
+   列宽取自原文件：B(12) C(12) D(18.6) E~L(3×8) M(9.13) N(8.13)
+   换算百分比：B 14.31% C 14.31% D 22.18% E~L 各 3.577% M 10.89% N 9.70%（摘要=B:D 合计 50.8%）
+*/
+:root{
+  --bg:#f4f6f9; --panel:#ffffff; --line:#e3e8ef; --ink:#1f2733; --muted:#7a8699;
+  --brand:#2f6df0; --brand-d:#1f54c4; --danger:#e5484d; --ok:#2ea043;
+  --shadow:0 1px 3px rgba(20,40,80,.08),0 6px 20px rgba(20,40,80,.06);
+  --grid:#2b2b2b;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;
+  background:var(--bg);color:var(--ink);font-size:14px;
+}
+
+/* ---------- 顶栏 ---------- */
+.topbar{
+  height:56px;background:var(--panel);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between;padding:0 18px;
+  position:sticky;top:0;z-index:20;
+}
+.brand{font-weight:700;font-size:16px;letter-spacing:.5px}
+.brand .ver{font-size:11px;color:var(--muted);font-weight:400;margin-left:6px}
+.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.divider{width:1px;height:22px;background:var(--line);margin:0 4px}
+.btn{
+  border:1px solid var(--brand);background:var(--brand);color:#fff;
+  padding:7px 14px;border-radius:7px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s;
+}
+.btn:hover{background:var(--brand-d);border-color:var(--brand-d)}
+.btn.ghost{background:#fff;color:var(--brand)}
+.btn.ghost:hover{background:#eef3ff}
+.btn.sm{padding:5px 10px;font-size:12px}
+.btn.danger{border-color:var(--danger);color:var(--danger);background:#fff}
+.btn.danger:hover{background:#fdecec}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ---------- 布局 ---------- */
+.layout{display:flex;height:calc(100vh - 56px)}
+.sidebar{
+  width:350px;min-width:350px;background:var(--panel);border-right:1px solid var(--line);
+  padding:16px;display:flex;flex-direction:column;gap:12px;overflow:hidden;
+}
+.content{flex:1;overflow:auto;padding:18px 26px 40px}
+
+/* ---------- 上传区 ---------- */
+.dropzone{border:2px dashed #c3cee0;border-radius:12px;padding:18px 14px;text-align:center;background:#fafcff;transition:.15s}
+.dropzone.drag{border-color:var(--brand);background:#eef3ff}
+.dz-icon{font-size:26px}
+.dz-main{margin:6px 0 2px;font-weight:600}
+.dz-sub{margin:0;color:var(--muted);font-size:13px}
+.dz-hint{margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.6;text-align:left}
+.link{background:none;border:none;color:var(--brand);cursor:pointer;font-size:13px;padding:0;text-decoration:underline}
+.link.danger{color:var(--danger)}
+
+/* ---------- 引擎状态 ---------- */
+.engine-box{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:#fcfdff}
+.engine-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);margin-bottom:6px}
+.engine-status{display:flex;flex-wrap:wrap;gap:5px}
+.es{padding:2px 7px;border-radius:20px;border:1px solid var(--line);font-size:11px;white-space:nowrap}
+.es-ok{background:#e9f8ee;color:var(--ok);border-color:#bfe6c9}
+.es-wait{background:#fff4e0;color:#b9740a;border-color:#ffe2a8}
+.es-bad{background:#fdecec;color:var(--danger);border-color:#f6c9c9}
+.es-src{font-size:11px;color:var(--muted);margin-top:6px}
+
+/* ---------- 发票列表 ---------- */
+.list-head{display:flex;justify-content:space-between;align-items:center;font-weight:600;color:var(--muted);font-size:13px}
+.invoice-list{list-style:none;margin:0;padding:0;flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px}
+.inv-item{border:1px solid var(--line);border-radius:10px;padding:9px;display:flex;gap:9px;background:#fff;align-items:center}
+.inv-item .thumb{width:52px;height:52px;border-radius:8px;background:#eef1f6;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);overflow:hidden;border:1px solid var(--line)}
+.inv-item .thumb img{width:100%;height:100%;object-fit:cover}
+.inv-item .meta{flex:1;min-width:0}
+.inv-item .name{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.inv-item .sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.45;word-break:break-all}
+.tag{font-size:11px;padding:1px 7px;border-radius:20px;background:#eef3ff;color:var(--brand-d);white-space:nowrap}
+.tag.ing{background:#fff4e0;color:#b9740a}
+.tag.err{background:#fdecec;color:var(--danger)}
+.tag.ok{background:#e9f8ee;color:var(--ok)}
+.inv-item .ops{display:flex;flex-direction:column;gap:4px}
+.icon-btn{border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;padding:3px 8px;color:var(--ink);white-space:nowrap}
+.icon-btn:hover{border-color:var(--brand);color:var(--brand)}
+.icon-btn.del:hover{border-color:var(--danger);color:var(--danger)}
+.progress{margin-top:4px;height:4px;border-radius:3px;background:#eef1f6;overflow:hidden}
+.progress i{display:block;height:100%;background:var(--brand);width:0}
+
+/* ---------- 工具栏 ---------- */
+.content-toolbar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.tip{background:#fff7e6;border:1px solid #ffe2a8;color:#8a5a00;padding:6px 11px;border-radius:8px;font-size:12.5px}
+.sheet-tools{display:inline-flex;gap:8px;margin-left:auto}
+.empty-tip{text-align:center;color:var(--muted);margin-top:22px;font-size:13px}
+/* 无识别组件时显示的手动填写提示（常驻提示框，可被 .hidden 隐藏） */
+.manual-hint{margin:14px auto 0;max-width:760px;background:#fff4f0;border:1px solid #ffd0c0;color:#9a3b1b;
+  padding:11px 14px;border-radius:8px;font-size:13px;line-height:1.6;text-align:left}
+.manual-hint b{color:#b83a12}
+.manual-hint.hidden{display:none !important}
+
+/* ---------- 报销单卡片 ---------- */
+.sheet{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:24px;max-width:1180px;margin:0 auto}
+
+/* ---------- 报销单表格（逐格对齐表样） ---------- */
+.bx-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;background:#fff}
+.bx-table td{border:1px solid var(--grid);padding:5px 4px;vertical-align:middle;text-align:center;word-break:break-all}
+.bx-title{font-size:22px;font-weight:700;letter-spacing:3px;padding:10px 0 !important;text-align:center}
+.bx-h{text-align:left !important;font-weight:600;font-size:13.5px;padding:7px 9px !important;white-space:nowrap}
+.bx-th{background:#f2f5fa;font-weight:600;line-height:1.35}
+.bx-ths{background:#f2f5fa;font-weight:600;font-size:12px;padding:3px 0 !important}
+.bx-summary{text-align:left !important;padding:3px 4px !important}
+.bx-digit{padding:2px 1px !important}
+.bx-tot span{font-size:15px;font-weight:700}
+.bx-total{font-weight:700;background:#f7f9fc}
+.bx-tl{text-align:left !important;font-size:13.5px;padding:6px 8px !important;white-space:nowrap}
+.bx-tl b{font-size:14px;letter-spacing:1px}
+.bx-tc{font-weight:700;font-size:12.5px}
+.bx-sign td{vertical-align:bottom !important;text-align:center !important;font-weight:600;font-size:12.5px;padding:8px 4px !important;line-height:1.4}
+/* 签字栏：每个栏位 = 小标签 + 可填姓名（标签在上、签名线在下，窄列也能放下） */
+.sg-cell{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%}
+.sg-l{font-size:11px;color:#333;white-space:nowrap;font-weight:600}
+.sg-in{text-align:center !important;font-weight:400;min-width:44px;max-width:100%}
+/* 复核：标签与签字框合并一格（横跨 分+科目），去掉中间的竖向分隔线 */
+.sg-inline{flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:nowrap}
+.sg-inline .sg-l{flex:0 0 auto}
+.sg-inline .sg-in{width:auto;flex:1 1 auto;min-width:50px;max-width:none;text-align:center !important}
+.bx-sign .bx-in:hover{background:#f4f8ff}
+.bx-sign .bx-in:focus{background:#eef5ff;box-shadow:inset 0 0 0 1px #b9d1ff}
+
+/* 可编辑格子：默认完全无线条（避免导出后出现多余横线），靠悬停/聚焦的浅底色提示可编辑 */
+.bx-in{
+  border:none;outline:none;background:transparent;font-family:inherit;font-size:13px;
+  color:var(--ink);padding:4px 3px;border-radius:4px;width:100%;display:block;
+}
+.bx-in:hover{background:#f4f8ff}
+.bx-in:focus{background:#eef5ff;box-shadow:inset 0 0 0 1px #b9d1ff}
+.bx-summary .bx-in{text-align:left}
+.bx-digit .bx-in{font-size:15px;font-weight:600;padding:3px 0;text-align:center}
+.bx-incount{text-align:center}
+.bx-h .bx-in{display:inline-block;width:auto;min-width:70px;padding:2px 4px;font-weight:400}
+/* 「部门：」后面的填写线，与原表 部门：＿＿＿＿＿＿ 一致 */
+.bx-h input.bx-line{border-bottom:1px solid #555;border-radius:0;min-width:110px}
+.bx-h input.bx-line:hover{background:#f4f8ff}
+.bx-del{
+  border:none;background:#fdecec;color:#e5484d;border-radius:4px;cursor:pointer;
+  font-size:11px;width:17px;height:17px;line-height:1;padding:0;margin-right:3px;vertical-align:middle;
+}
+.bx-del:hover{background:#f6c9c9}
+
+/* 打印 / 出图捕获模式：隐藏操作按钮与提示，去掉所有输入框痕迹 */
+body.capturing .screen-only{display:none !important}
+body.capturing .bx-in{background:transparent !important;box-shadow:none !important;color:var(--ink) !important}
+body.capturing .bx-in:hover{background:transparent !important}
+body.capturing .sheet{border:none !important;box-shadow:none !important;border-radius:0 !important;padding:16px !important}
+
+/* ---------- 弹窗 / 提示 ---------- */
+.modal{position:fixed;inset:0;background:rgba(15,25,45,.45);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal.hidden,.toast.hidden,.empty-tip.hidden{display:none}
+.modal-box{background:#fff;border-radius:14px;width:min(680px,92vw);max-height:86vh;overflow:auto;box-shadow:var(--shadow)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff}
+.modal-head h3{margin:0;font-size:16px}
+.modal-close{border:none;background:none;font-size:22px;cursor:pointer;color:var(--muted);line-height:1}
+.modal-body{padding:16px 22px 22px}
+.modal-body h4{margin:16px 0 6px;color:var(--brand-d);font-size:14px}
+.modal-body ol,.modal-body ul{margin:6px 0;padding-left:20px;line-height:1.75;font-size:13px}
+.modal-body p{line-height:1.75;color:#33415c;font-size:13px;margin:6px 0}
+.modal-body code{background:#f2f5fa;padding:1px 5px;border-radius:4px;font-size:12px}
+.diag-row{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13px}
+.diag-row b{font-weight:600}
+.diag-ok{color:var(--ok)}
+.diag-bad{color:var(--danger)}
+
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%);
+  background:#1f2733;color:#fff;padding:10px 18px;border-radius:9px;font-size:13px;
+  z-index:60;box-shadow:var(--shadow);max-width:82vw;line-height:1.6;
+}
+
+/* ---------- 打印：只出报销单 ---------- */
+@page{size:A4 portrait;margin:12mm}
+@media print{
+  .topbar,.sidebar,.content-toolbar,.empty-tip,.screen-only,.modal,.toast{display:none !important}
+  .layout{display:block;height:auto}
+  .content{padding:0;overflow:visible}
+  .sheet{border:none !important;box-shadow:none !important;border-radius:0 !important;padding:0 !important;max-width:none !important;margin:0 !important}
+  .bx-table{font-size:11pt}
+  .bx-in{background:transparent !important;box-shadow:none !important;color:#000 !important;padding:0 !important}
+  .bx-in:hover{background:transparent !important}
+  .bx-title{font-size:20pt}
+}

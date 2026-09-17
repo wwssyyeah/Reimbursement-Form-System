@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>报销单系统</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">报销单系统 <span class="ver">v2.2</span></div>
+  <div class="actions">
+    <button class="btn" data-export="excel">导出 Excel</button>
+    <button class="btn" data-export="word">导出 Word</button>
+    <button class="btn" data-export="pdf">导出 PDF</button>
+    <button class="btn" data-export="png">导出 PNG</button>
+    <button class="btn" data-export="jpg">导出 JPG</button>
+    <span class="divider"></span>
+    <button class="btn ghost" data-print>打印</button>
+    <button class="btn ghost" data-diagnose>组件自检</button>
+    <button class="btn ghost" data-help>使用帮助</button>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- 左侧 -->
+  <aside class="sidebar">
+    <div id="dropzone" class="dropzone">
+      <div class="dz-icon">📥</div>
+      <p class="dz-main">把<b>发票</b>拖到这里</p>
+      <p class="dz-sub">或 <button id="pickBtn" class="link" type="button">点击选择文件</button>（可一次选多张）</p>
+      <input id="fileInput" type="file" multiple
+        accept=".pdf,.jpg,.jpeg,.png,.bmp,.webp,.doc,.docx,.xls,.xlsx,.csv" hidden>
+      <p class="dz-hint">上传的是<b>发票</b>（PDF / JPG / PNG / Word / Excel）。上传后每张发票会立刻占一行，识别成功的自动填好，识别不准的点格子改即可。</p>
+    </div>
+
+    <div class="engine-box">
+      <div class="engine-head">
+        <span>识别组件</span>
+        <button id="reloadEngines" class="link" type="button">重新加载</button>
+      </div>
+      <div id="engineStatus" class="engine-status"></div>
+    </div>
+
+    <div class="list-head">
+      <span>已上传发票 <b id="invCount">0</b> 张</span>
+      <button id="clearAll" class="link danger" type="button" hidden>清空</button>
+    </div>
+    <ul id="invoiceList" class="invoice-list"></ul>
+  </aside>
+
+  <!-- 右侧：报销单（严格对齐 报销单_54_fee.xlsx 表样） -->
+  <section class="content">
+    <div class="content-toolbar">
+      <span class="tip">表内所有格子都能直接点进去改；金额分格与「合计（大写）」自动计算。</span>
+      <div class="sheet-tools screen-only">
+        <button id="addRow" class="btn ghost sm" type="button">＋ 增加一行</button>
+        <button id="clearRows" class="btn ghost sm danger" type="button">清空明细</button>
+      </div>
+    </div>
+    <div id="sheet" class="sheet">
+      <table id="bxTable" class="bx-table"></table>
+    </div>
+    <p id="emptyTip" class="empty-tip">左侧上传发票后，识别结果会自动填进上面的报销单；识别不出来也能手工填，点格子就能改。</p>
+    <p id="manualHint" class="manual-hint hidden">未加载识别组件：不影响使用，<b>直接在表格里手动填写每一格</b>即可（摘要、金额、签字栏都能手填）。需要自动识别时，请用「启动.bat」双击打开（会读取随包引擎，完全离线）。</p>
+  </section>
+</main>
+
+<!-- 帮助 -->
+<div id="helpModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><h3>使用帮助</h3><button class="modal-close" type="button" data-close-help>×</button></div>
+    <div class="modal-body">
+      <h4>一、怎么用</h4>
+      <ol>
+        <li>把<b>发票</b>文件拖进左侧框，或点「点击选择文件」。一次可以选多张。</li>
+        <li>每张发票会<b>立刻在右边占一行</b>（摘要先填文件名），识别完成后自动改成「销售方＋票号」并把金额按位填进八位分格。</li>
+        <li>识别不准的地方，直接点那一格改。金额和「合计（大写）」会自动重算。</li>
+        <li>填上部门、报销日期，点顶栏按钮导出 Excel / Word / PDF / PNG / JPG，或直接打印。</li>
+      </ol>
+
+      <h4>二、报销单版式</h4>
+      <p>严格按你提供的《费用报销单》表样：标题「费 用 报 销 单」／部门与报销日期／表头（摘要 · 金额按「十万 万 千 百 十 元 角 分」八位分格，最高有效位之前的位留空不写 0 · 科目 · 单据张数）／5 行明细／合计（大写）／签字栏（财会主管 · 记账 · 经办人 · 部门主管 · 复核 · 报销人，姓名均可在网页里直接填写）。列宽与合并方式都取自文件本身。</p>
+
+      <h4>三、识别准确率</h4>
+      <p>图片和扫描件走本地中文 OCR，对<b>端正、清晰</b>的发票较好；拍照歪斜、盖章遮挡、褶皱的容易出错。<b>每个格子都能手动改</b>，导出前请核对金额。系统会顺手把销售方、票号、价税合计、开票日期、发票种类（专票／普票等）挑出来。</p>
+      <p>发票右上角若印有<b>二维码</b>，系统会<b>优先扫描二维码</b>取出发票代码、号码、开票日期和金额（机器读取，比 OCR 更准、更完整、不怕模糊），再用 OCR 补「销售方、项目名称」。二维码里的「金额」按国税局规范为合计金额，通常就是报销用的价税合计；若与票面不一致请手工改。</p>
+
+      <h4>四、联网与数据</h4>
+      <ul>
+        <li>发票和报销数据只存在你这台电脑的浏览器里，<b>不上传任何服务器</b>。</li>
+        <li>识别与导出组件优先用随包的 <code>lib/</code> 目录（此时完全离线可用）；用「双击启动」的 bat 打开时会走本地文件，最稳。</li>
+        <li>若直接双击 index.html，浏览器不允许读取本地引擎文件，会自动改从网络镜像加载——<b>这条路要联网</b>，公司网络受限时可能失败。</li>
+        <li>关掉网页数据不会自动保存，报销单做完请及时导出。</li>
+        <li>一次识别一张图大约几秒到几十秒，第一张还要先准备 OCR 引擎（约 6MB），请稍等。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- 自检 -->
+<div id="diagModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head"><h3>组件自检</h3><button class="modal-close" type="button" data-close-help>×</button></div>
+    <div class="modal-body" id="diagBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
