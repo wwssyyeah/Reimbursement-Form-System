@@ -1,4 +1,4 @@
-/* 报销单系统  v2.2 — 2026-09-16
+/* 报销单系统  v2.9 — 2026-09-17
  * 纯本地网页：发票上传 -> 多格式识别 -> 自动填入「费用报销单」
  *
  * 报销单版式严格对齐 报销单_54_fee.xlsx「费用报销单」表样（B:N 共 13 列）：
@@ -47,6 +47,15 @@ var LIBS = {
     jsd: 'xlsx@0.18.5/dist/xlsx.full.min.js',
     npm: 'xlsx/0.18.5/files/dist/xlsx.full.min.js',
     test: function () { return !!(window.XLSX && window.XLSX.utils); }
+  },
+  /* 导出用：能写「真样式」（边框/字体/合并/列宽/行高）的 xlsx 生成库。
+     随包 lib/ 里是隔离了全局名（XLSX_STYLE）的版本，避免与上面的解析库打架；
+     走 CDN 时拿不到该全局名，会自动回退到旧的 HTML .xls 方式。 */
+  xlsxStyle: {
+    label: 'Excel导出', local: 'xlsx.style.min.js',
+    jsd: 'xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
+    npm: 'xlsx-js-style/1.2.0/files/dist/xlsx.bundle.js',
+    test: function () { return !!(window.XLSX_STYLE && window.XLSX_STYLE.utils && window.XLSX_STYLE.write); }
   },
   mammoth: {
     label: 'Word解析', local: 'mammoth.browser.min.js',
@@ -321,6 +330,34 @@ function totalCount() { var c = 0; state.rows.forEach(function (r) { c += num(r.
 function hasData() {
   return state.invoices.length > 0 || state.rows.some(function (r) {
     return r.summary || r.subject || num(r.count) || num(r.amount);
+  });
+}
+
+/* ==================================================================
+ * 三·b、报销台账（localStorage）：已导出/打印的发票记「已报销」，
+ *        重复上传时拦截。仅存本机浏览器，换电脑/换浏览器/清数据会失效。
+ * ================================================================== */
+var REIMB_KEY = 'bx_reimb_v1';
+function loadReimb() {
+  try { var o = JSON.parse(localStorage.getItem(REIMB_KEY)); if (o && o.hash && o.num) return o; } catch (e) {}
+  return { hash: {}, num: {} };
+}
+function saveReimb(o) { try { localStorage.setItem(REIMB_KEY, JSON.stringify(o)); } catch (e) {} }
+function isoToday() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+function fmtLedgerDate(iso) {
+  var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? (+m[2]) + '月' + (+m[3]) + '日' : String(iso || '');
+}
+/* 文件内容指纹：优先 SHA-256（需 https/localhost），否则退回 名称+大小+修改时间 */
+function fileHash(file) {
+  return readAsArrayBuffer(file).then(function (buf) {
+    if (window.crypto && window.crypto.subtle && buf.byteLength < 60 * 1024 * 1024) {
+      return window.crypto.subtle.digest('SHA-256', buf).then(function (dig) {
+        var a = Array.prototype.slice.call(new Uint8Array(dig));
+        return 'sha:' + a.map(function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+      }).catch(function () { return 'fb:' + file.name + '|' + file.size + '|' + (file.lastModified || 0); });
+    }
+    return 'fb:' + file.name + '|' + file.size + '|' + (file.lastModified || 0);
   });
 }
 
@@ -648,7 +685,11 @@ function mergeInvoice(ocr, qr) {
   return d;
 }
 function applyMerged(row, d) {
-  /* 摘要列不自动填，保留可编辑文本框供手工录入 */
+  /* 摘要 = 发票出具方公司全称 + 发票内容（如「××公司 服务费」） */
+  var sum = (d.seller || '').trim();
+  if (d.item && d.item.trim() && d.item.trim() !== sum) sum += (sum ? ' ' : '') + d.item.trim();
+  if (!sum) sum = d.type || '发票';
+  row.summary = sum;
   row.amount = num(d.total);
   row.digits = amountToDigits(row.amount);
   /* 科目：专票 / 普票（按识别结果填写，可在表格手改或清空） */
@@ -795,24 +836,66 @@ function takeBlankRow() {
 }
 /* （applyParsed 已由 mergeInvoice + applyMerged 取代，见五·a） */
 
+/* 本次会话内被用户选择「重新报销」放行的发票文件指纹集合 */
+var allowedForce = new Set();
+
+/* 弹出重复上传提醒窗，返回 Promise<true=重新报销 / false=谢谢提醒> */
+function showDuplicateModal(msg) {
+  return new Promise(function (resolve) {
+    var m = $('#dupModal');
+    if (!m) { resolve(false); return; }
+    $('#dupMsg').textContent = msg;
+    m.classList.remove('hidden');
+    var bRe = $('#dupReReimb'), bTh = $('#dupThanks');
+    function done(choice) {
+      m.classList.add('hidden');
+      bRe.removeEventListener('click', onRe);
+      bTh.removeEventListener('click', onTh);
+      resolve(choice);
+    }
+    function onRe() { done(true); }
+    function onTh() { done(false); }
+    bRe.addEventListener('click', onRe);
+    bTh.addEventListener('click', onTh);
+  });
+}
+
 async function handleFiles(fileList) {
   var files = Array.prototype.slice.call(fileList);
   if (!files.length) { toast('没有选到文件'); return; }
   var accept = ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
-  var jobs = [], skipped = [];
-  files.forEach(function (f) {
-    var ext = extOf(f.name);
-    if (accept.indexOf(ext) < 0) { skipped.push(f.name); return; }
-    var rec = { id: uid(), fileName: f.name, ext: ext, thumb: '', status: 'ing', error: '排队中', rawText: '', progress: 0, qrOk: false, file: f };
+    var lg = loadReimb();
+    var jobs = [], blocked = [], skipped = [];
+    for (var fi = 0; fi < files.length; fi++) {
+      var f = files[fi];
+      var ext = extOf(f.name);
+      if (accept.indexOf(ext) < 0) { skipped.push(f.name); continue; }
+      var hash = await fileHash(f);
+      /* 同一份文件此前已上传过（无论是否导出）-> 弹窗让用户选择 */
+      if (lg.hash[hash]) {
+        if (allowedForce.has(hash)) {
+          /* 本次会话已选过「重新报销」此文件，直接放行 */
+        } else {
+          var dupMsg = '「' + f.name + '」已于 ' + fmtLedgerDate(lg.hash[hash].when) + ' 上传过。是否仍要重新报销？';
+          var goAhead = await showDuplicateModal(dupMsg);
+          if (!goAhead) { blocked.push('「' + f.name + '」已拦截重复上传'); continue; }
+          allowedForce.add(hash);   // 本次放行，processOne 不再按号码二次拦截
+        }
+      }
+      /* 记下本次上传：之后不论是否导出，再次上传同一文件都会被拦 */
+      lg.hash[hash] = { when: isoToday(), fileName: f.name };
+      var rec = { id: uid(), fileName: f.name, ext: ext, thumb: '', status: 'ing', error: '排队中', rawText: '', progress: 0, qrOk: false, file: f, hash: hash, number: '' };
     state.invoices.push(rec);
     var row = takeBlankRow();
     row.invId = rec.id;
-    row.summary = '';   // 先占行，摘要留空供手工填写
+    row.summary = baseName(f.name);   // 先占行，保证报销单不为空
     row.count = 1;
     jobs.push({ file: f, rec: rec, row: row, ext: ext });
-  });
+  }
+  saveReimb(lg);
   renderAll();
   if (skipped.length) toast('忽略不支持的文件：' + skipped.join('、'));
+  if (blocked.length) toast(blocked.join('；'));
   if (!jobs.length) return;
   toast('已接收 ' + jobs.length + ' 张，开始识别…（首张需先准备 OCR 组件）');
   for (var i = 0; i < jobs.length; i++) await processOne(jobs[i]);
@@ -852,6 +935,31 @@ async function processOne(job) {
     }
     var data = mergeInvoice(parsed, qr);
     data.vat = detectVat(text, qr);           // 科目：专票/普票（机器优先）
+    rec.number = data.number || '';           // 记住票号，供「重复报销」拦截
+    /* 同一张发票（换了文件再上传）此前已上传过 -> 弹窗让用户选择；
+       否则把票号记进台账（与文件指纹配合，下次任何方式再传都拦） */
+    if (rec.number && (data.hasCore || data.seller || data.item)) {
+      var lg2 = loadReimb();
+      var prev = lg2.num[rec.number];
+      if (prev && prev.hash !== rec.hash) {
+        if (allowedForce.has(rec.hash)) {
+          /* 用户在 handleFiles 已选「重新报销」，本次直接放行 */
+        } else {
+          var re2 = await showDuplicateModal('发票（号码 ' + rec.number + '）已于 ' + fmtLedgerDate(prev.when) + ' 上传过（当时文件名『' + prev.fileName + '』）。是否仍要重新报销？');
+          if (re2) {
+            allowedForce.add(rec.hash);
+            lg2.num[rec.number] = { when: isoToday(), fileName: rec.fileName, hash: rec.hash };
+            saveReimb(lg2);
+          } else {
+            blockDuplicate(rec, job.row, prev);
+            return;
+          }
+        }
+      } else {
+        lg2.num[rec.number] = { when: (prev && prev.when) || isoToday(), fileName: rec.fileName, hash: rec.hash };
+        saveReimb(lg2);
+      }
+    }
     if (data.hasCore || data.seller || data.item) {
       applyMerged(job.row, data);
       if (data.date) state.date = normDate(data.date);   // 报销日期：按发票开票日期填写
@@ -925,10 +1033,28 @@ function renderList() {
 /* 列宽取自原 xlsx（B12 C12 D18.6 E~L各3 M9.13 N8.13，合计 83.86） */
 var COL_PCT = [14.31, 14.31, 22.18, 3.577, 3.577, 3.577, 3.577, 3.577, 3.577, 3.577, 3.577, 10.89, 9.70];
 
-function renderSheet() {
-  var t = $('#bxTable');
-  if (!t) return;
-  var rows = state.rows;
+var FORM_ROWS = 5;   // 每张报销单 5 行明细；超出自动生成第 2、3…张
+/* 把 flat 的 state.rows 切成「每张 5 行」的若干报销单；最后一张不足 5 行也补齐到 5 行 */
+function formsFromRows() {
+  var per = FORM_ROWS;
+  var rows = state.rows.slice();
+  var n = Math.max(1, Math.ceil(rows.length / per));
+  var forms = [];
+  for (var f = 0; f < n; f++) {
+    var chunk = rows.slice(f * per, f * per + per);
+    while (chunk.length < per) chunk.push(blankRow());
+    forms.push(chunk);
+  }
+  return forms;
+}
+
+/* 生成「单张报销单」的完整 <table> 内部 HTML。
+   screen=true 含删除按钮与可编辑输入框；screen=false 供导出用（仍输出 input，由 cleanFormInputs 替换为纯文字）。 */
+function buildFormHtml(rows, opt) {
+  opt = opt || {};
+  var base = opt.base || 0;           // 该张明细在 state.rows 中的全局起始下标
+  var k = (opt.k != null) ? opt.k : 0;
+  var screen = !!opt.screen;
   var html = '';
 
   html += '<colgroup>';
@@ -936,12 +1062,12 @@ function renderSheet() {
   html += '</colgroup>';
 
   /* 行1 标题 */
-  html += '<tr><td class="bx-title" colspan="13">费  用  报  销  单</td></tr>';
+  html += '<tr><td class="bx-title" colspan="13">苏州沛斯仁光电科技有限公司费用报销单</td></tr>';
 
-  /* 行2 部门 | 报销日期 */
+  /* 行2 部门 | 报销日期（每张都渲染，绑定同一份共享值） */
   html += '<tr>' +
-    '<td class="bx-h" colspan="2">部门：<input id="f-dept" class="bx-in bx-line" type="text" value="' + esc(state.dept) + '"></td>' +
-    '<td class="bx-h" colspan="11">报销日期：<input id="f-date" class="bx-in" type="text" value="' + esc(state.date) + '" placeholder="按发票开票日期"></td>' +
+    '<td class="bx-h" colspan="2">部门：<input class="bx-in bx-line f-dept" type="text" data-k="dept" value="' + esc(state.dept) + '"></td>' +
+    '<td class="bx-h" colspan="11">报销日期：<input class="bx-in f-date" type="text" data-k="date" value="' + esc(state.date) + '" placeholder="按发票开票日期"></td>' +
     '</tr>';
 
   /* 行3-4 表头 */
@@ -954,34 +1080,36 @@ function renderSheet() {
   DIGIT_LABELS.forEach(function (l) { html += '<td class="bx-ths">' + l + '</td>'; });
   html += '</tr>';
 
-  /* 行5.. 明细（全部为实体行，可直接输入） */
-  rows.forEach(function (row, i) {
+  /* 行5.. 明细（每一行都是可直接输入的实体行，全局下标 = base + 局部下标） */
+  rows.forEach(function (row, li) {
+    var gi = base + li;
     html += '<tr class="bx-row">' +
       '<td class="bx-summary" colspan="3">' +
-      '<button class="bx-del screen-only" type="button" data-r="' + i + '" title="删除本行">✕</button>' +
-      '<input class="bx-in" type="text" data-r="' + i + '" data-k="summary" value="' + esc(row.summary) + '" placeholder="摘要（可手填）">' +
+      (screen ? '<button class="bx-del screen-only" type="button" data-r="' + gi + '" title="删除本行">✕</button>' : '') +
+      '<input class="bx-in" type="text" data-r="' + gi + '" data-k="summary" value="' + esc(row.summary) + '">' +
       '</td>';
     var vd = visibleDigits(row.digits);
     for (var d = 0; d < 8; d++) {
-      html += '<td class="bx-digit"><input class="bx-in" type="text" maxlength="1" inputmode="numeric" data-r="' + i + '" data-d="' + d + '" value="' + esc(vd[d] || '') + '"></td>';
+      html += '<td class="bx-digit"><input class="bx-in" type="text" maxlength="1" inputmode="numeric" data-r="' + gi + '" data-d="' + d + '" value="' + esc(vd[d] || '') + '"></td>';
     }
-    html += '<td>' + '<input class="bx-in" type="text" data-r="' + i + '" data-k="subject" value="' + esc(row.subject) + '">' + '</td>';
-    html += '<td><input class="bx-in bx-incount" type="text" maxlength="3" inputmode="numeric" data-r="' + i + '" data-k="count" value="' + esc(row.count) + '"></td>';
+    html += '<td>' + '<input class="bx-in" type="text" data-r="' + gi + '" data-k="subject" value="' + esc(row.subject) + '">' + '</td>';
+    html += '<td><input class="bx-in bx-incount" type="text" maxlength="3" inputmode="numeric" data-r="' + gi + '" data-k="count" value="' + esc(row.count) + '"></td>';
     html += '</tr>';
   });
 
-  /* 合计（大写）行 */
-  var tot = computeTotal();
-  var td = amountToDigits(tot);
+  /* 合计（大写）行：仅合计本张明细 */
+  var ftot = 0; rows.forEach(function (r) { ftot += num(r.amount); });
+  var fcnt = 0; rows.forEach(function (r) { fcnt += num(r.count); });
+  var td = amountToDigits(ftot);
   var vtd = visibleDigits(td);
   html += '<tr class="bx-total">' +
-    '<td class="bx-tl" colspan="3">合计（大写）：<b id="t-capital">' + toCapital(tot) + '</b></td>';
+    '<td class="bx-tl" colspan="3">合计（大写）：<b class="t-capital" data-form="' + k + '">' + toCapital(ftot) + '</b></td>';
   vtd.forEach(function (v, i) {
-    html += '<td class="bx-digit bx-tot"><span id="tot-d-' + i + '">' + (v || '') + '</span></td>';
+    html += '<td class="bx-digit bx-tot"><span class="t-totd" data-form="' + k + '" data-i="' + i + '">' + (v || '') + '</span></td>';
   });
-  html += '<td class="bx-tc" colspan="2">单据 <b id="t-totalcount">' + totalCount() + '</b></td></tr>';
+  html += '<td class="bx-tc" colspan="2">单据 <b class="t-tcount" data-form="' + k + '">' + Math.round(fcnt) + '</b></td></tr>';
 
-  /* 签字栏（严格按原文件列位：E:J 为「部门主管」合并区）；每个栏位可手填姓名 */
+  /* 签字栏（严格按原文件列位：部门主管合并 6 列、复核合并 3 列）；每张都渲染，绑定同一份共享值 */
   function sgColspan(label, key, cs) {
     return '<td colspan="' + cs + '"><div class="sg-cell"><span class="sg-l">' + label + '</span>' +
       '<input class="bx-in sg-in" type="text" data-s="' + key + '" value="' + esc(state.sign[key]) + '"></div></td>';
@@ -991,27 +1119,60 @@ function renderSheet() {
     sgColspan('记账', 'jizhang', 1) +
     sgColspan('经办人', 'jingban', 1) +
     sgColspan('部门主管', 'bumen', 6) +
-    '<td colspan="3"><div class="sg-cell sg-inline"><span class="sg-l">复核</span>' +
-      '<input class="bx-in sg-in" type="text" data-s="fuhe" value="' + esc(state.sign.fuhe) + '"></div></td>' +
+    sgColspan('复核', 'fuhe', 3) +
     sgColspan('报销人', 'baoxiao', 1) +
     '</tr>';
+  return html;
+}
 
-  t.innerHTML = html;
-
-  var fd = $('#f-dept'); if (fd) fd.addEventListener('input', function () { state.dept = fd.value; });
-  var ft = $('#f-date'); if (ft) ft.addEventListener('input', function () { state.date = ft.value; });
+function renderSheet() {
+  var formsEl = $('#forms');
+  if (!formsEl) return;
+  var forms = formsFromRows();
+  var html = '';
+  forms.forEach(function (rows, k) {
+    html += '<div class="form-block">' +
+      '<div class="form-cap screen-only">报销单 ' + (k + 1) + (forms.length > 1 ? ' / ' + forms.length : '') + '</div>' +
+      '<table class="bx-table" data-form="' + k + '">' +
+      buildFormHtml(rows, { screen: true, base: k * FORM_ROWS, k: k }) +
+      '</table></div>';
+  });
+  formsEl.innerHTML = html;
+  /* 每张表内：明细行行高统一（空白行撑到与已填行同高） */
+  Array.prototype.forEach.call(formsEl.querySelectorAll('.bx-table'), unifyDetailRows);
   var et = $('#emptyTip'); if (et) et.classList.toggle('hidden', hasData());
 }
 
+/* 明细行行高统一：以「已填入发票内容的整行」高度为标准，空白行也撑到同样高，
+   避免填了内容的行比空行高（屏上、导出 PDF/Excel/Word/打印 都统一） */
+function unifyDetailRows(table) {
+  if (!table) return;
+  var rows = Array.prototype.slice.call(table.querySelectorAll('tr.bx-row'));
+  if (rows.length < 2) return;
+  rows.forEach(function (r) { r.style.height = ''; });
+  var max = 0;
+  rows.forEach(function (r) {
+    var h = r.getBoundingClientRect().height || r.offsetHeight || 0;
+    if (h > max) max = h;
+  });
+  if (max > 0) rows.forEach(function (r) { r.style.height = max + 'px'; });
+}
+
 function updateTotals() {
-  var tot = computeTotal();
-  var cap = $('#t-capital'); if (cap) cap.textContent = toCapital(tot);
-  var ds = visibleDigits(amountToDigits(tot));
-  for (var i = 0; i < 8; i++) {
-    var el = document.getElementById('tot-d-' + i);
-    if (el) el.textContent = ds[i] || '';
-  }
-  var tc = $('#t-totalcount'); if (tc) tc.textContent = totalCount();
+  var forms = formsFromRows();
+  forms.forEach(function (rows, k) {
+    var tot = 0; rows.forEach(function (r) { tot += num(r.amount); });
+    var cap = document.querySelector('.t-capital[data-form="' + k + '"]');
+    if (cap) cap.textContent = toCapital(tot);
+    var ds = visibleDigits(amountToDigits(tot));
+    for (var i = 0; i < 8; i++) {
+      var el = document.querySelector('.t-totd[data-form="' + k + '"][data-i="' + i + '"]');
+      if (el) el.textContent = ds[i] || '';
+    }
+    var fc = 0; rows.forEach(function (r) { fc += num(r.count); });
+    var tc = document.querySelector('.t-tcount[data-form="' + k + '"]');
+    if (tc) tc.textContent = Math.round(fc);
+  });
   var et = $('#emptyTip'); if (et) et.classList.toggle('hidden', hasData());
 }
 
@@ -1019,12 +1180,14 @@ function updateTotals() {
  * 九、编辑交互
  * ================================================================== */
 function bindSheet() {
-  var t = $('#bxTable');
+  var t = $('#forms');
   if (!t) return;
 
   t.addEventListener('input', function (e) {
     var el = e.target;
     if (!el || !el.dataset) return;
+    if (el.dataset.k === 'dept') { state.dept = el.value; return; }
+    if (el.dataset.k === 'date') { state.date = el.value; return; }
     if (el.dataset.d !== undefined) {
       var r = state.rows[+el.dataset.r];
       if (!r) return;
@@ -1137,7 +1300,7 @@ async function retryOne(id) {
   if (!rec) return;
   if (!rec.file) { toast('原文件已不在内存中，请重新上传'); return; }
   var row = state.rows.filter(function (r) { return r.invId === id; })[0];
-  if (!row) { row = takeBlankRow(); row.invId = id; row.count = 1; }
+  if (!row) { row = takeBlankRow(); row.invId = id; row.summary = baseName(rec.fileName); row.count = 1; }
   await processOne({ file: rec.file, rec: rec, row: row, ext: rec.ext });
   toast('「' + rec.fileName + '」已重新识别');
 }
@@ -1145,11 +1308,125 @@ async function retryOne(id) {
 /* ==================================================================
  * 十、导出
  * ================================================================== */
-/* 生成「干净」表格：去掉操作按钮，输入框换成纯文字（避免导出图出现多余横线） */
-function cleanTableClone() {
-  var src = $('#bxTable');
-  if (!src) return null;
-  var t = src.cloneNode(true);
+/* 重复上传拦截：命中已报销台账则清掉占行，提示日期与当时文件名 */
+function blockDuplicate(rec, row, entry) {
+  state.invoices = state.invoices.filter(function (x) { return x.id !== rec.id; });
+  if (row) { row.invId = null; row.summary = ''; row.subject = ''; row.count = ''; row.amount = 0; row.digits = emptyDigits(); }
+  renderAll();
+  toast('发票（号码 ' + rec.number + '）已于 ' + fmtLedgerDate(entry.when) + ' 上传过（当时文件名『' + entry.fileName + '』），已拦截重复上传');
+}
+
+/* 导出/打印时，把当前报销单里用到的发票标记「已报销」（下次上传即拦截） */
+function markExported() {
+  var lg = loadReimb();
+  var when = isoToday();
+  state.invoices.forEach(function (rec) {
+    var row = state.rows.filter(function (r) { return r.invId === rec.id; })[0];
+    var used = row && (row.summary || row.subject || num(row.count) || num(row.amount));
+    if (!used) return;
+    /* 仅在上传时未记录过才补写，保留最初「上传日期」作为拦截提示 */
+    if (rec.hash && !lg.hash[rec.hash]) lg.hash[rec.hash] = { when: when, fileName: rec.fileName };
+    if (rec.number && !lg.num[rec.number]) lg.num[rec.number] = { when: when, fileName: rec.fileName, hash: rec.hash };
+  });
+  saveReimb(lg);
+}
+
+/* 干净表格克隆（输入框->纯文字、去按钮），并按固定像素宽设置列宽，便于离线导出对齐 */
+/* 从「某张报销单的明细行」构建一张干净、带固定列宽与可靠边框模型的 <table> 元素（供导出/出图） */
+/* 把「最右列的单元格」加右边框、「最后一行的单元格」加下边框。
+   原因：html2canvas 只可靠绘制单元格边框，不能依赖 <table> 元素的右/下边框。
+   用 cellIndex 等价推导的「视觉列号」计算 rightCol（含 colspan），
+   并用 ri+rowspan 计算 bottomRow，兼容合并单元格；LAST_COL=12（共 13 列 A..N）。 */
+function addOuterBorders(t) {
+  var LAST_COL = 12;
+  var trs = Array.prototype.slice.call(t.querySelectorAll('tr'));
+  var lastRow = trs.length - 1;
+  var occupied = {};            // occupied[c] = 被上一行 rowspan 占用到的大于一行的行号
+  trs.forEach(function (tr, ri) {
+    var col = 0;
+    Array.prototype.forEach.call(tr.children, function (td) {
+      while (occupied[col] && occupied[col] > ri) col++;   // 跳过被 rowspan 占用的列
+      if (td.tagName !== 'TD' && td.tagName !== 'TH') return;
+      var cs = parseInt(td.getAttribute('colspan') || '1', 10) || 1;
+      var rs = parseInt(td.getAttribute('rowspan') || '1', 10) || 1;
+      var rightCol = col + cs - 1;
+      var bottomRow = ri + rs - 1;
+      if (rightCol === LAST_COL) td.style.borderRight = '1px solid #2b2b2b';
+      if (bottomRow === lastRow) td.style.borderBottom = '1px solid #2b2b2b';
+      if (rs > 1) { for (var c = col; c <= rightCol; c++) occupied[c] = ri + rs; }
+      col = rightCol + 1;
+    });
+  });
+}
+function buildFormTable(rows, fixedPx) {
+  var t = document.createElement('table');
+  t.setAttribute('class', 'bx-table');
+  t.innerHTML = buildFormHtml(rows, { screen: false, base: 0, k: 0 });
+  /* 导出边框模型（html2canvas 友好）：
+     html2canvas 不会可靠绘制 <table> 元素自身的边框（右/下边尤其容易被丢），
+     所以最右边框 / 最下边框必须画在「单元格」上。
+     做法：每个 td 画上/左边框（内部网格）；addOuterBorders 把右/下外框画在
+     「最右列 / 最后一行」的单元格上。兼容 colspan/rowspan。 */
+  t.style.borderCollapse = 'separate';
+  t.style.borderSpacing = '0';
+  t.style.borderRight = '0';
+  t.style.borderBottom = '0';
+  Array.prototype.forEach.call(t.querySelectorAll('td'), function (td) {
+    td.style.borderTop = '1px solid #2b2b2b';
+    td.style.borderLeft = '1px solid #2b2b2b';
+    td.style.borderRight = '0';
+    td.style.borderBottom = '0';
+  });
+  addOuterBorders(t);
+  var cg = t.querySelector('colgroup');
+  if (cg) {
+    cg.innerHTML = '';
+    COL_PCT.forEach(function (w) {
+      var c = document.createElement('col');
+      c.style.width = (w / 100 * fixedPx) + 'px';
+      cg.appendChild(c);
+    });
+  }
+  return t;
+}
+/* 离屏渲染某张报销单为 canvas（固定宽，保证 A4 比例稳定） */
+function renderFormToCanvas(rows, fixedPx) {
+  return loadLib('html2canvas').then(function (ok) {
+    if (!ok) throw new Error('出图组件不可用（网络受限）');
+    var t = buildFormTable(rows, fixedPx);
+    if (!t) throw new Error('没有可导出的报销单');
+    var holder = document.createElement('div');
+    /* 不加 padding、用 content-box，确保表格刚好 fixedPx 宽，避免右侧被内边距挤出导致裁切 */
+    holder.style.cssText = 'position:fixed;left:-99999px;top:0;width:' + fixedPx + 'px;background:#fff;box-sizing:content-box;';
+    holder.appendChild(t);
+    document.body.appendChild(holder);
+    unifyDetailRows(t);   // 截图前对齐明细行高，保证 PDF 里空白行与已填行同高
+    return new Promise(function (res, rej) {
+      window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false }).then(function (c) {
+        if (holder.parentNode) holder.parentNode.removeChild(holder);
+        res(c);
+      }, function (e) { if (holder.parentNode) holder.parentNode.removeChild(holder); rej(e); });
+    });
+  });
+}
+/* 单张报销单的内联化 HTML（用于 Excel / 打印，固定宽 + 显式边框） */
+function oneFormTableHtml(rows, fixedPx) {
+  var t = buildFormTable(rows, fixedPx);
+  if (!t) return '';
+  var holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-99999px;top:0;width:' + fixedPx + 'px;background:#fff;box-sizing:content-box';
+  holder.appendChild(t); document.body.appendChild(holder);
+  unifyDetailRows(t);
+  cleanFormInputs(t);
+  inlineize(t);
+  t.setAttribute('style', 'border-collapse:collapse;width:' + fixedPx + 'px;table-layout:fixed;font-family:Microsoft YaHei,sans-serif;font-size:11pt');
+  var html = t.outerHTML;
+  if (holder.parentNode) holder.parentNode.removeChild(holder);
+  return html;
+}
+
+/* 把表格里的输入框替换为纯文字 span（去掉操作按钮），供导出 */
+function cleanFormInputs(t) {
   Array.prototype.forEach.call(t.querySelectorAll('.screen-only'), function (n) {
     if (n.parentNode) n.parentNode.removeChild(n);
   });
@@ -1157,7 +1434,7 @@ function cleanTableClone() {
     var sp = document.createElement('span');
     sp.className = (el.className || '') + ' bx-val';
     sp.textContent = el.value || '';
-    if (el.id === 'f-dept') sp.className += ' bx-line-val';
+    if (el.classList && el.classList.contains('bx-line')) sp.className += ' bx-line-val';
     if (el.parentNode) el.parentNode.replaceChild(sp, el);
   });
   return t;
@@ -1167,7 +1444,7 @@ function inlineize(t) {
   Array.prototype.forEach.call(t.querySelectorAll('td'), function (td) {
     var cls = ' ' + (td.className || '') + ' ';
     var st = 'border:1px solid #000000;padding:4px 3px;vertical-align:middle;';
-    if (/ bx-title /.test(cls)) st += 'font-size:18pt;font-weight:bold;text-align:center;padding:8px 0;letter-spacing:2pt;';
+    if (/ bx-title /.test(cls)) st += 'font-size:18pt;font-weight:bold;text-align:center;padding:8px 0;letter-spacing:0;white-space:nowrap;';
     else if (/ bx-h /.test(cls)) st += 'text-align:left;font-weight:bold;';
     else if (/ bx-tl /.test(cls)) st += 'text-align:left;font-weight:bold;';
     else if (/ bx-summary /.test(cls)) st += 'text-align:left;';
@@ -1188,24 +1465,155 @@ function inlineize(t) {
   t.setAttribute('style', 'border-collapse:collapse;width:100%');
   return t;
 }
-function officeHtml() {
-  var t = cleanTableClone();
+function officeHtml(rows) {
+  var t = buildFormTable(rows, 720);
   if (!t) return '';
+  var holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed;left:-99999px;top:0;width:720px;background:#fff;box-sizing:content-box';
+  holder.appendChild(t); document.body.appendChild(holder);
+  unifyDetailRows(t);
+  cleanFormInputs(t);
   inlineize(t);
+  var inner = t.innerHTML;
+  if (holder.parentNode) holder.parentNode.removeChild(holder);
   return '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns="http://www.w3.org/TR/REC-html40">' +
     '<head><meta charset="utf-8"><title>费用报销单</title></head><body>' +
     '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;font-family:Microsoft YaHei,sans-serif;font-size:11pt">' +
-    t.innerHTML + '</table></body></html>';
+    inner + '</table></body></html>';
 }
+/* 用 xlsx-js-style 把「某张报销单」写成一个 worksheet（含列宽/行高/合并/边框/字体/对齐） */
+function buildSheetForForm(rows, label) {
+  var X = window.XLSX_STYLE;
+  if (!X) return null;
+  var ws = {};
+  var bd = { top: { style: 'thin', color: { rgb: 'FF000000' } }, bottom: { style: 'thin', color: { rgb: 'FF000000' } }, left: { style: 'thin', color: { rgb: 'FF000000' } }, right: { style: 'thin', color: { rgb: 'FF000000' } } };
+  var base = { name: '微软雅黑', sz: 10 };
+  function set(r, c, val, opt) {
+    opt = opt || {};
+    var ref = X.utils.encode_cell({ r: r, c: c });
+    var st = {
+      border: bd,
+      font: Object.assign({}, base, opt.font || {}),
+      alignment: Object.assign({ vertical: 'center', horizontal: opt.align || 'center', wrapText: !!opt.wrap }, opt.align2 || {})
+    };
+    ws[ref] = { v: val, t: (typeof val === 'number') ? 'n' : 's', s: st };
+  }
+  /* 行1 标题 */
+  set(0, 0, '苏州沛斯仁光电科技有限公司费用报销单', { align: 'center', font: { name: '微软雅黑', sz: 16, bold: true } });
+  /* 行2 部门 | 报销日期 */
+  set(1, 0, '部门：' + (state.dept || ''), { align: 'left' });
+  set(1, 2, '报销日期：' + (state.date || ''), { align: 'left' });
+  /* 行3-4 表头 */
+  set(2, 0, '摘要', { align: 'center' });
+  set(2, 3, '金额', { align: 'center' });
+  set(2, 11, '科目', { align: 'center' });
+  set(2, 12, '单据\n张数', { align: 'center', align2: { wrapText: true } });
+  DIGIT_LABELS.forEach(function (l, i) { set(3, 3 + i, l, { align: 'center' }); });
+  /* 明细 */
+  rows.forEach(function (row, li) {
+    var r = 4 + li;
+    set(r, 0, row.summary || '', { align: 'left', wrap: true });
+    var vd = visibleDigits(row.digits);
+    for (var d = 0; d < 8; d++) {
+      var dv = vd[d] || '';
+      set(r, 3 + d, dv === '' ? '' : (/^[0-9]+$/.test(dv) ? Number(dv) : dv), { align: 'center' });
+    }
+    set(r, 11, row.subject || '', { align: 'center', wrap: true });
+    set(r, 12, row.count ? (/^[0-9]+$/.test(String(row.count)) ? Number(row.count) : row.count) : '', { align: 'center' });
+  });
+  /* 合计（仅本张） */
+  var ftot = 0; rows.forEach(function (r) { ftot += num(r.amount); });
+  set(9, 0, '合计（大写）：' + toCapital(ftot), { align: 'left' });
+  var tds = visibleDigits(amountToDigits(ftot));
+  for (var i = 0; i < 8; i++) {
+    var tv = tds[i] || '';
+    set(9, 3 + i, tv === '' ? '' : (/^[0-9]+$/.test(tv) ? Number(tv) : tv), { align: 'center' });
+  }
+  var fcnt = 0; rows.forEach(function (r) { fcnt += num(r.count); });
+  set(9, 11, '单据 ' + Math.round(fcnt), { align: 'center' });
+  /* 签字栏 */
+  set(10, 0, '财会主管', { align: 'center' });
+  set(10, 1, '记账', { align: 'center' });
+  set(10, 2, '经办人', { align: 'center' });
+  set(10, 3, '部门主管', { align: 'center' });
+  set(10, 9, '复核', { align: 'center' });
+  set(10, 12, '报销人', { align: 'center' });
+  /* 合并 */
+  ws['!merges'] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 12 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 1 } },
+    { s: { r: 1, c: 2 }, e: { r: 1, c: 12 } },
+    { s: { r: 2, c: 0 }, e: { r: 3, c: 2 } },
+    { s: { r: 2, c: 3 }, e: { r: 2, c: 10 } },
+    { s: { r: 2, c: 11 }, e: { r: 3, c: 11 } },
+    { s: { r: 2, c: 12 }, e: { r: 3, c: 12 } },
+    { s: { r: 9, c: 0 }, e: { r: 9, c: 2 } },
+    { s: { r: 9, c: 11 }, e: { r: 9, c: 12 } },
+    { s: { r: 10, c: 3 }, e: { r: 10, c: 8 } },
+    { s: { r: 10, c: 9 }, e: { r: 10, c: 11 } }
+  ];
+  /* 每行明细「摘要」跨 3 列合并 */
+  rows.forEach(function (_, li) { ws['!merges'].push({ s: { r: 4 + li, c: 0 }, e: { r: 4 + li, c: 2 } }); });
+  /* 列宽（按原表样比例，单位：字符宽） */
+  ws['!cols'] = COL_PCT.map(function (w) { return { wch: w }; });
+  /* 行高（pt） */
+  ws['!rows'] = [
+    { hpt: 30 }, { hpt: 22 }, { hpt: 20 }, { hpt: 18 },
+    { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 },
+    { hpt: 26 }, { hpt: 34 }
+  ];
+  ws['!pageSetup'] = { orientation: 'portrait', fitToWidth: 1, fitToHeight: 0, paperSize: 9 };
+  ws['!ref'] = X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 10, c: 12 } });
+  return ws;
+}
+
+/* Excel 导出（真 .xlsx，含样式）；XLSX_STYLE 不可用时回退 HTML .xls */
 function exportExcel() {
-  downloadDataUrl('data:application/vnd.ms-excel;charset=utf-8,' + encodeURIComponent(officeHtml()),
+  var forms = formsFromRows();
+  if (!forms.length) { toast('没有可导出的报销单'); return; }
+  loadLib('xlsxStyle').then(function (ok) {
+    var X = window.XLSX_STYLE;
+    if (!ok || !X) { excelFallback(forms); return; }
+    var wb = X.utils.book_new();
+    forms.forEach(function (rows, k) {
+      var ws = buildSheetForForm(rows, '报销单' + (k + 1));
+      if (ws) X.utils.book_append_sheet(wb, ws, '报销单' + (k + 1));
+    });
+    var out = X.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true, bookSST: true });
+    var blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = '费用报销单_' + (state.date || cnDate()) + '.xlsx';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 1500);
+    markExported();
+    toast('已导出 Excel（' + (forms.length > 1 ? forms.length + ' 张报销单，每个工作表一张' : 'A4 竖版版式') + '）');
+  }).catch(function () { excelFallback(forms); });
+}
+/* 兼容回退：旧 HTML .xls（多张堆叠） */
+function excelFallback(forms) {
+  var mso = '<!--[if gte mso 9]><xml><ExcelWorkbook><ExcelWorksheets><ExcelWorksheet>' +
+    '<Name>费用报销单</Name><PageSetup><x:PaperSizeIndex>9</x:PaperSizeIndex>' +
+    '<x:Orientation>Portrait</x:Orientation><x:FitWidth>1</x:FitWidth><x:FitHeight>0</x:FitHeight>' +
+    '</PageSetup><Selected/></ExcelWorksheet></ExcelWorksheets></ExcelWorkbook></xml><![endif]-->';
+  var parts = forms.map(function (rows) { return oneFormTableHtml(rows, 720); });
+  var html = '<html xmlns:o="urn:schemas-microsoft-com:office:office" ' +
+    'xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">' +
+    '<head><meta charset="utf-8"><title>费用报销单</title>' + mso + '</head><body>' +
+    parts.join('<div style="height:18px"></div>') + '</body></html>';
+  downloadDataUrl('data:application/vnd.ms-excel;charset=utf-8,' + encodeURIComponent(html),
     '费用报销单_' + (state.date || cnDate()) + '.xls');
-  toast('已导出 Excel（版式与预览一致）');
+  markExported();
+  toast('已导出 Excel（兼容模式，多张堆叠）');
 }
 function exportWord() {
-  downloadDataUrl('data:application/msword;charset=utf-8,' + encodeURIComponent(officeHtml()),
+  var forms = formsFromRows();
+  if (!forms.length) { toast('没有可导出的报销单'); return; }
+  var parts = forms.map(function (rows) { return officeHtml(rows); });
+  downloadDataUrl('data:application/msword;charset=utf-8,' + encodeURIComponent(parts.join('<br>')),
     '费用报销单_' + (state.date || cnDate()) + '.doc');
-  toast('已导出 Word（版式与预览一致）');
+  markExported();
+  toast('已导出 Word（' + (forms.length > 1 ? forms.length + ' 张报销单' : '版式与预览一致') + '）');
 }
 
 /* 出图：临时进入「捕获模式」（藏按钮、去输入框底色），拍完恢复 */
@@ -1234,26 +1642,69 @@ function exportImage(kind) {
     var name = '费用报销单_' + (state.date || cnDate());
     if (kind === 'png') downloadDataUrl(canvas.toDataURL('image/png'), name + '.png');
     else downloadDataUrl(canvas.toDataURL('image/jpeg', 0.95), name + '.jpg');
+    markExported();
     toast('已导出 ' + (kind === 'png' ? 'PNG' : 'JPG'));
   }).catch(function (e) {
     toast((e && e.message ? e.message : '出图失败') + '，改用打印窗口（可选“另存为 PDF”）');
     window.print();
   });
 }
+/* PDF：每 2 张报销单排在一个 A4 竖版页面的上下半页，等比（contain）缩放并略缩，保证整张表完整显示 */
 function exportPdf() {
-  captureSheet().then(function (canvas) {
+  var forms = formsFromRows();
+  if (!forms.length) { toast('没有可导出的报销单'); return; }
+  var fixedPx = 794;
+  var scaleDown = 0.97;
+  Promise.all(forms.map(function (rows) { return renderFormToCanvas(rows, fixedPx); })).then(function (cans) {
     return loadLib('jspdf').then(function (ok) {
       if (!ok) throw new Error('PDF 组件不可用');
-      var js = (window.jspdf && window.jspdf.jsPDF) ? window.jspdf.jsPDF : window.jsPDF;
-      var pdf = new js({ orientation: 'p', unit: 'pt', format: [canvas.width, canvas.height] });
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, canvas.width, canvas.height);
+      var X = (window.jspdf && window.jspdf.jsPDF) ? window.jspdf.jsPDF : window.jsPDF;
+      var pdf = new X('p', 'pt', 'a4');             // A4 竖版 595.28 × 841.89
+      var pw = pdf.internal.pageSize.getWidth();
+      var ph = pdf.internal.pageSize.getHeight();
+      var m = 12;                                    // 四周留白（pt）
+      var perPage = 2;
+      var slotH = (ph - 2 * m) / perPage;            // 半页高
+      var slotW = pw - 2 * m;
+      for (var i = 0; i < cans.length; i += perPage) {
+        if (i > 0) pdf.addPage();
+        for (var j = 0; j < perPage && i + j < cans.length; j++) {
+          var c = cans[i + j];
+          var s = Math.min(slotW / c.width, slotH / c.height) * scaleDown;  // 等比缩放，整张表完整
+          var cw = c.width * s, ch = c.height * s;
+          var cx = m + (slotW - cw) / 2;
+          var cy = m + j * slotH + (slotH - ch) / 2;
+          pdf.addImage(c.toDataURL('image/png'), 'PNG', cx, cy, cw, ch);
+        }
+      }
+      markExported();
       pdf.save('费用报销单_' + (state.date || cnDate()) + '.pdf');
-      toast('已导出 PDF');
+      toast('已导出 PDF（A4 竖版，每页上下两张、完整不裁切）');
     });
   }).catch(function (e) {
     toast((e && e.message ? e.message : '导出失败') + '，改用打印窗口，请选“另存为 PDF”');
-    window.print();
+    doPrint();
   });
+}
+
+/* 打印：专用打印区，每页上下两张报销单（与 PDF 一致的 2-up 版式） */
+function doPrint() {
+  markExported();
+  var pa = $('#printArea');
+  if (pa) {
+    var forms = formsFromRows();
+    var html = '';
+    var perPage = 2;
+    for (var i = 0; i < forms.length; i += perPage) {
+      html += '<div class="bx-print-page">';
+      for (var j = 0; j < perPage && i + j < forms.length; j++) {
+        html += '<table class="bx-table">' + buildFormHtml(forms[i + j], { screen: false, base: 0, k: 0 }) + '</table>';
+      }
+      html += '</div>';
+    }
+    pa.innerHTML = html;
+  }
+  window.print();
 }
 
 function downloadDataUrl(url, name) {
@@ -1280,7 +1731,15 @@ function showDiagnose() {
   rowsHtml += diagRow('合计金额', capital2(computeTotal()) + '（' + toCapital(computeTotal()) + '）', true);
   var box = $('#diagBody');
   box.innerHTML = rowsHtml +
-    '<p style="margin-top:12px;color:#7a8699;font-size:12px">若某个组件显示「不可用」：请改用「双击启动」的 bat 打开（会读取随包 lib/，完全离线）；或联网后点左侧「重新加载」。</p>';
+    '<p style="margin-top:12px;color:#7a8699;font-size:12px">若某个组件显示「不可用」：请改用「双击启动」的 bat 打开（会读取随包 lib/，完全离线）；或联网后点左侧「重新加载」。</p>' +
+    '<button id="clearReimb" class="btn danger sm" type="button" style="margin-top:14px">清除本地报销记录（解除拦截）</button>' +
+    '<p style="margin-top:6px;color:#7a8699;font-size:12px">已上传过的发票会被记到本机浏览器，重复上传会拦截；点上面可清空记录。</p>';
+  $('#clearReimb').addEventListener('click', function () {
+    if (confirm('清除后，之前上传过的发票将不再被拦截（重复上传不会被拦）。确定清除？')) {
+      try { localStorage.removeItem(REIMB_KEY); } catch (e) {}
+      toast('已清除本地报销记录');
+    }
+  });
   $('#diagModal').classList.remove('hidden');
 }
 function diagRow(k, v, ok) {
@@ -1301,7 +1760,7 @@ function bindGlobal() {
       else if (k === 'jpg') exportImage('jpg');
     });
   });
-  $('[data-print]').addEventListener('click', function () { window.print(); });
+  $('[data-print]').addEventListener('click', function () { doPrint(); });
   $('[data-diagnose]').addEventListener('click', showDiagnose);
   $('[data-help]').addEventListener('click', function () { $('#helpModal').classList.remove('hidden'); });
   $$('[data-close-help]').forEach(function (b) {

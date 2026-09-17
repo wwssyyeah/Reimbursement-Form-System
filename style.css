@@ -99,11 +99,23 @@ body{
 
 /* ---------- 报销单卡片 ---------- */
 .sheet{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:24px;max-width:1180px;margin:0 auto}
+/* 多张报销单：纵向堆叠，每张独立卡片 + 编号 */
+.forms{display:flex;flex-direction:column;gap:26px}
+.form-block{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+.form-cap{background:#f3f6fb;color:#53607a;font-size:12px;font-weight:600;padding:6px 12px;border-bottom:1px solid var(--line)}
+.form-block .bx-table{border-radius:0}
 
 /* ---------- 报销单表格（逐格对齐表样） ---------- */
-.bx-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;background:#fff}
-.bx-table td{border:1px solid var(--grid);padding:5px 4px;vertical-align:middle;text-align:center;word-break:break-all}
-.bx-title{font-size:22px;font-weight:700;letter-spacing:3px;padding:10px 0 !important;text-align:center}
+/* 用 separate + border-spacing:0 的可靠边框模型。
+   关键：最右/最下的外框必须画在「单元格」上（.bx-table td:last-child / tr:last-child td），
+   不能画在 <table> 元素上 —— html2canvas 不会可靠绘制 table 元素自身的右/下边框，
+   这正是之前 PDF/图片右边框缺失的真正原因。每个 td 画上/左边框（内部网格），
+   最右列单元格画右边框、最后一行单元格画下边框，视觉仍是 1px 完整网格。 */
+.bx-table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:13px;background:#fff}
+.bx-table td{border-top:1px solid var(--grid);border-left:1px solid var(--grid);border-right:0;border-bottom:0;padding:5px 4px;vertical-align:middle;text-align:center;word-break:break-all}
+.bx-table td:last-child{border-right:1px solid var(--grid)}
+.bx-table tr:last-child td{border-bottom:1px solid var(--grid)}
+.bx-title{font-size:20px;font-weight:700;letter-spacing:0;white-space:nowrap;padding:10px 0 !important;text-align:center;overflow:hidden}
 .bx-h{text-align:left !important;font-weight:600;font-size:13.5px;padding:7px 9px !important;white-space:nowrap}
 .bx-th{background:#f2f5fa;font-weight:600;line-height:1.35}
 .bx-ths{background:#f2f5fa;font-weight:600;font-size:12px;padding:3px 0 !important}
@@ -119,10 +131,6 @@ body{
 .sg-cell{display:flex;flex-direction:column;align-items:center;gap:4px;width:100%}
 .sg-l{font-size:11px;color:#333;white-space:nowrap;font-weight:600}
 .sg-in{text-align:center !important;font-weight:400;min-width:44px;max-width:100%}
-/* 复核：标签与签字框合并一格（横跨 分+科目），去掉中间的竖向分隔线 */
-.sg-inline{flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:nowrap}
-.sg-inline .sg-l{flex:0 0 auto}
-.sg-inline .sg-in{width:auto;flex:1 1 auto;min-width:50px;max-width:none;text-align:center !important}
 .bx-sign .bx-in:hover{background:#f4f8ff}
 .bx-sign .bx-in:focus{background:#eef5ff;box-shadow:inset 0 0 0 1px #b9d1ff}
 
@@ -175,15 +183,26 @@ body.capturing .sheet{border:none !important;box-shadow:none !important;border-r
   z-index:60;box-shadow:var(--shadow);max-width:82vw;line-height:1.6;
 }
 
-/* ---------- 打印：只出报销单 ---------- */
-@page{size:A4 portrait;margin:12mm}
+/* ---------- 打印：专用打印区，每页上下两张报销单 ---------- */
+#printArea{display:none}
+@page{size:A4 portrait;margin:8mm}
 @media print{
-  .topbar,.sidebar,.content-toolbar,.empty-tip,.screen-only,.modal,.toast{display:none !important}
-  .layout{display:block;height:auto}
-  .content{padding:0;overflow:visible}
-  .sheet{border:none !important;box-shadow:none !important;border-radius:0 !important;padding:0 !important;max-width:none !important;margin:0 !important}
-  .bx-table{font-size:11pt}
-  .bx-in{background:transparent !important;box-shadow:none !important;color:#000 !important;padding:0 !important}
-  .bx-in:hover{background:transparent !important}
-  .bx-title{font-size:20pt}
+  .topbar,.sidebar,.content-toolbar,.empty-tip,.screen-only,.modal,.toast,.sheet,.manual-hint,.form-cap{display:none !important}
+  #printArea{display:block !important;position:absolute;left:0;top:0;width:100%}
+  #printArea .bx-print-page{
+    break-after:page;page-break-after:always;
+    height:281mm;box-sizing:border-box;
+    display:flex;flex-direction:column;justify-content:space-around;
+    padding:0 2mm;
+  }
+  #printArea .bx-table{
+    width:100% !important;table-layout:fixed !important;
+    border-collapse:separate !important;border-spacing:0 !important;
+    font-size:15px;
+  }
+  #printArea .bx-table td{font-size:13px;padding:5px 4px}
+  #printArea .bx-title{font-size:18pt;font-weight:700;letter-spacing:0;white-space:nowrap;padding:10px 0 !important;text-align:center}
+  #printArea .bx-h{text-align:left !important;font-size:13px;padding:7px 9px !important}
+  #printArea .bx-tl{text-align:left !important;font-size:13px;padding:6px 8px !important}
+  #printArea .bx-sign td{font-size:12px;padding:8px 4px !important}
 }

@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">报销单系统 <span class="ver">v2.2</span></div>
+  <div class="brand">报销单系统 <span class="ver">v3.1</span></div>
   <div class="actions">
     <button class="btn" data-export="excel">导出 Excel</button>
     <button class="btn" data-export="word">导出 Word</button>
@@ -59,12 +59,15 @@
       </div>
     </div>
     <div id="sheet" class="sheet">
-      <table id="bxTable" class="bx-table"></table>
+      <div id="forms" class="forms"></div>
     </div>
     <p id="emptyTip" class="empty-tip">左侧上传发票后，识别结果会自动填进上面的报销单；识别不出来也能手工填，点格子就能改。</p>
     <p id="manualHint" class="manual-hint hidden">未加载识别组件：不影响使用，<b>直接在表格里手动填写每一格</b>即可（摘要、金额、签字栏都能手填）。需要自动识别时，请用「启动.bat」双击打开（会读取随包引擎，完全离线）。</p>
   </section>
 </main>
+
+<!-- 打印专用区：导出/打印时填入上下两张报销单，屏幕不可见 -->
+<div id="printArea"></div>
 
 <!-- 帮助 -->
 <div id="helpModal" class="modal hidden">
@@ -74,13 +77,13 @@
       <h4>一、怎么用</h4>
       <ol>
         <li>把<b>发票</b>文件拖进左侧框，或点「点击选择文件」。一次可以选多张。</li>
-        <li>每张发票会<b>立刻在右边占一行</b>，识别完成后自动把金额按位填进八位分格、并填好日期与科目（专票／普票）；<b>「摘要」列留空，请在表格里手工填写</b>。</li>
+        <li>每张发票会<b>立刻在右边占一行</b>，识别完成后自动把「摘要（销售方＋发票内容）」、金额按位填进八位分格，并填好日期与科目（专票／普票）。</li>
         <li>识别不准的地方，直接点那一格改。金额和「合计（大写）」会自动重算。</li>
-        <li>填上部门、报销日期，点顶栏按钮导出 Excel / Word / PDF / PNG / JPG，或直接打印。</li>
+        <li>填上部门、报销日期，点顶栏按钮导出 Excel / Word / PDF / PNG / JPG，或直接打印。<b>明细超过 5 行会自动分成第 2、3…张报销单，并在网页里逐张预览</b>；导出的 <b>PDF 为 A4 竖版，每页上下排两张报销单、等比缩放完整不裁切</b>；Excel 导出真正的 .xlsx（每张报销单一个工作表，含边框/列宽/合并）。</li>
       </ol>
 
       <h4>二、报销单版式</h4>
-      <p>严格按你提供的《费用报销单》表样：标题「费 用 报 销 单」／部门与报销日期／表头（摘要 · 金额按「十万 万 千 百 十 元 角 分」八位分格，最高有效位之前的位留空不写 0 · 科目 · 单据张数）／5 行明细／合计（大写）／签字栏（财会主管 · 记账 · 经办人 · 部门主管 · 复核 · 报销人，姓名均可在网页里直接填写）。列宽与合并方式都取自文件本身。</p>
+      <p>严格按你提供的《费用报销单》表样：标题「苏州沛斯仁光电科技有限公司费用报销单」／部门与报销日期／表头（摘要 · 金额按「十万 万 千 百 十 元 角 分」八位分格，最高有效位之前的位留空不写 0 · 科目 · 单据张数）／5 行明细／合计（大写）／签字栏（财会主管 · 记账 · 经办人 · 部门主管 · 复核 · 报销人，姓名均可在网页里直接填写）。列宽与合并方式都取自文件本身。</p>
 
       <h4>三、识别准确率</h4>
       <p>图片和扫描件走本地中文 OCR，对<b>端正、清晰</b>的发票较好；拍照歪斜、盖章遮挡、褶皱的容易出错。<b>每个格子都能手动改</b>，导出前请核对金额。系统会顺手把销售方、票号、价税合计、开票日期、发票种类（专票／普票等）挑出来。</p>
@@ -94,6 +97,9 @@
         <li>关掉网页数据不会自动保存，报销单做完请及时导出。</li>
         <li>一次识别一张图大约几秒到几十秒，第一张还要先准备 OCR 引擎（约 6MB），请稍等。</li>
       </ul>
+
+      <h4>五、重复上传拦截</h4>
+      <p>系统会记住<b>已经上传过</b>的发票（按文件指纹＋发票号码记在本机浏览器）。同一张发票再次上传——哪怕和别的发票一起、或换了文件（重新下载／重拍）——都会<b>被拦截并提示「已于 X 月 X 日 上传过」</b>，避免重复报销。记录只存在你这台电脑的浏览器里，换电脑／换浏览器／清掉浏览数据会失效；需要解除时，点顶栏「组件自检」里的「清除本地报销记录」。</p>
     </div>
   </div>
 </div>
@@ -103,6 +109,20 @@
   <div class="modal-box">
     <div class="modal-head"><h3>组件自检</h3><button class="modal-close" type="button" data-close-help>×</button></div>
     <div class="modal-body" id="diagBody"></div>
+  </div>
+</div>
+
+<!-- 重复上传提醒 -->
+<div id="dupModal" class="modal hidden">
+  <div class="modal-box" style="width:min(440px,92vw)">
+    <div class="modal-head"><h3>重复上传提醒</h3></div>
+    <div class="modal-body">
+      <p id="dupMsg" style="margin:4px 0 18px;color:#33415c;font-size:14px;line-height:1.7"></p>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button id="dupThanks" class="btn ghost" type="button">谢谢提醒</button>
+        <button id="dupReReimb" class="btn" type="button">重新报销</button>
+      </div>
+    </div>
   </div>
 </div>
 
