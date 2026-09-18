@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">报销单系统 <span class="ver">v3.1</span></div>
+  <div class="brand">报销单系统 <span class="ver">v3.4</span></div>
   <div class="actions">
     <button class="btn" data-export="excel">导出 Excel</button>
     <button class="btn" data-export="word">导出 Word</button>
@@ -44,7 +44,10 @@
 
     <div class="list-head">
       <span>已上传发票 <b id="invCount">0</b> 张</span>
-      <button id="clearAll" class="link danger" type="button" hidden>清空</button>
+      <span>
+        <button id="openInvDetail" class="link" type="button">查看全部</button>
+        <button id="clearAll" class="link danger" type="button" hidden>清空</button>
+      </span>
     </div>
     <ul id="invoiceList" class="invoice-list"></ul>
   </aside>
@@ -122,6 +125,18 @@
         <button id="dupThanks" class="btn ghost" type="button">谢谢提醒</button>
         <button id="dupReReimb" class="btn" type="button">重新报销</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 已上传发票详情 + 搜索 -->
+<div id="invDetailModal" class="modal hidden">
+  <div class="modal-box" style="width:min(560px,94vw);max-height:86vh;display:flex;flex-direction:column">
+    <div class="modal-head"><h3>已上传发票（<b id="invDetailCount">0</b> 张）</h3><button class="modal-close" type="button" data-close-inv>×</button></div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;overflow:hidden">
+      <input id="invSearch" class="inv-search" type="text" placeholder="搜索文件名（支持中文子串）…">
+      <ul id="invDetailList" class="inv-detail-list"></ul>
+      <p id="invDetailEmpty" class="inv-detail-empty hidden">没有匹配的发票。</p>
     </div>
   </div>
 </div>

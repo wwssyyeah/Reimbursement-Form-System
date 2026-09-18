@@ -425,28 +425,34 @@ function parseInvoice(text) {
 
   var m;
   m = t.match(/发票代码[:：]?(\d{10,12})/); if (m) r.code = m[1];
-  m = t.match(/发票号码[:：]?(\d{8,20})/); if (m) r.number = m[1];
-  if (!r.number) { m = t.match(/票据号码[:：]?(\d{8,20})/); if (m) r.number = m[1]; }
-  if (!r.number) { m = t.match(/号码[:：]?(\d{8,20})/); if (m) r.number = m[1]; }
+  m = t.match(/发票号码[:：]?\s*([0-9]{8,20})/); if (m) r.number = m[1];
+  if (!r.number) { m = t.match(/票据号码[:：]?\s*([0-9]{8,20})/); if (m) r.number = m[1]; }
+  if (!r.number) {
+    /* 阅读顺序错位：标签在页首、号码在页尾，中间夹着购买方/销售方信息。
+       向后（≤260 字）取首个 10~20 位纯数字串即为发票号码（增值税电子发票号码多为 20 位；
+       纳税人识别号含字母或排在其后，不会抢先命中）。二维码优先，此处仅作文字层兜底。 */
+    var npos = t.indexOf('发票号码'); if (npos < 0) npos = t.indexOf('票据号码');
+    if (npos >= 0) { var nrest = t.slice(npos + 4); var nm = nrest.match(/([0-9]{10,20})/); if (nm) r.number = nm[1]; }
+  }
+  if (!r.number) { m = t.match(/号码[:：]?\s*([0-9]{8,20})/); if (m) r.number = m[1]; }
 
   m = t.match(/开票日期[:：]?(\d{4})年(\d{1,2})月(\d{1,2})日/);
   if (m) r.date = m[1] + '-' + pad(m[2]) + '-' + pad(m[3]);
   if (!r.date) { m = t.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/); if (m) r.date = m[1] + '-' + pad(m[2]) + '-' + pad(m[3]); }
   if (!r.date) { m = t.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/); if (m) r.date = m[1] + '-' + pad(m[2]) + '-' + pad(m[3]); }
 
-  /* 价税合计（小写）：跨过「（大写）壹仟…（小写）」取第一个两位小数 */
-  m = t.match(/价税合计[^\d]{0,60}?(\d[\d,]*\.\d{2})/);
-  if (!m) m = t.match(/小写[^\d]{0,12}?(\d[\d,]*\.\d{2})/);
-  if (!m) m = t.match(/合计金额[^\d]{0,20}?(\d[\d,]*\.\d{2})/);
-  if (!m) m = t.match(/\((?:小写)\)[^\d]{0,12}?(\d[\d,]*\.\d{2})/);
+  /* 价税合计（小写）：电子发票文字层阅读顺序错位时，「（小写）」与其金额被大量
+     购买方/销售方文字隔开，故优先按「大写金额 ¥ 数字」定位——大写金额（圆整 / 圆X角X分）
+     之后紧跟的 ¥ 两位小数即价税合计，最稳。再退化到就近的「价税合计（小写）¥ 数字」等模式。 */
+  m = t.match(/[零壹贰叁肆伍陆柒捌玖拾佰仟万亿]+圆[零壹贰叁肆伍陆柒捌玖拾佰仟万亿角分整零\s]{0,30}?[¥￥]?\s*(\d[\d,]*\.\d{2})/);
+  if (!m) m = t.match(/价税合计[^\d¥￥（(]{0,80}?(\d[\d,]*\.\d{2})/);
+  if (!m) m = t.match(/（小写）[^\d¥￥]{0,12}?[¥￥]\s*(\d[\d,]*\.\d{2})/);
+  if (!m) m = t.match(/小写[^\d¥￥]{0,12}?(\d[\d,]*\.\d{2})/);
+  if (!m) m = t.match(/合计金额[^\d¥￥]{0,20}?(\d[\d,]*\.\d{2})/);
+  if (!m) m = t.match(/\((?:小写)\)[^\d¥￥]{0,12}?(\d[\d,]*\.\d{2})/);
   if (m) r.total = m[1].replace(/,/g, '');
-  if (!r.total) {
-    /* 兜底：取全文中最大的两位小数（发票上通常是价税合计） */
-    var cand = t.match(/\d[\d,]*\.\d{2}/g) || [];
-    var max = 0;
-    cand.forEach(function (x) { var v = num(x); if (v > max) max = v; });
-    if (max > 0 && /发票|税额|合计/.test(t)) { r.total = String(max); r.totalGuessed = true; }
-  }
+  /* 不再兜底为「全文最大两位小数」：多发票或异常文本会抓到错误大数（如 99999999）。
+     取不到价税合计就留空，改由二维码金额或导出时提示手工补填。 */
 
   /* 销售方公司全称 —— 二维码不含此项，只能靠 OCR，故做多重兜底
      ① 优先「销售方…名称：公司名 纳税人识别号」（兼容 OCR 把「名称」误识为「各称/名你」）
@@ -511,19 +517,24 @@ function parsePdfLayout(items) {
     if (/销售方/.test(it.s) && !/购买方/.test(it.s)) { if (sx === null || it.x > sx) sx = it.x; }
   });
 
-  /* 候选公司名：整段文字含主体后缀即视为公司名（取完整文字项，避免停在公司名中间的「酒店」等字） */
-  var compRe = /[一-龥A-Za-z0-9（）()·.\-]*?(?:公司|有限公司|有限责任公司|事务所|集团|酒店|旅行社|商行|中心|学校|医院|银行|合作社|厂|店|超市|科技|实业|工作室)/;
+  /* 候选公司名：要求整段文字项本身就是「主体名 + 公司/集团/…」后缀（锚定首尾），
+     避免把「银行账号:1051…」这类只含「银行」二字的非公司行误判为公司。
+     开户行（银行/支行）虽在右侧但不是销售方，故 seller 优先取「公司类」主体。 */
+  var compRe = /^[一-龥A-Za-z0-9（）()·.\-]{2,40}?(?:公司|有限公司|有限责任公司|事务所|集团|酒店|旅行社|商行|中心|学校|医院|合作社|厂|店|超市|科技|实业|工作室)$/;
   var cands = [];
   its.forEach(function (it) {
     if (!compRe.test(it.s)) return;
+    if (/账号|税号|识别号|电话|地址|开户行/.test(it.s)) return;   // 排除账号/税号等废行
     var name = it.s.replace(/^(名称|销方|卖方|销售方|购买方)?[:：]?\s*/, '').trim();
     if (name.length >= 4) cands.push({ name: name, x: it.x, y: it.y });
   });
 
   if (sx !== null) {
-    /* 销售方在右侧栏：取 x 大于标签且最靠右的公司 */
+    /* 销售方在右侧栏：取 x 大于标签且最靠右的「公司类」主体；无则退而取最靠右候选 */
     var right = cands.filter(function (c) { return c.x > sx - 6; });
-    if (right.length) res.seller = right[right.length - 1].name;
+    var corp = right.filter(function (c) { return /(公司|集团|事务所|中心|学校|医院|厂|店|商行|合作社|科技|实业|工作室|有限责任公司)$/.test(c.name); });
+    if (corp.length) res.seller = corp[corp.length - 1].name;
+    else if (right.length) res.seller = right[right.length - 1].name;
   }
   if (!res.seller && cands.length) res.seller = cands[cands.length - 1].name;
 
@@ -757,7 +768,8 @@ async function ocrImage(dataUrl, rec) {
   return (out && out.data && out.data.text) || '';
 }
 
-async function processPdf(file, rec) {
+/* 抽取 PDF 每一页的文字层 + 坐标 + 二维码，返回 pages 数组（不再按页当成一张发票） */
+async function processPdf(file) {
   var ok = await loadLib('pdfjs');
   if (!ok) throw new Error('PDF 解析组件不可用（网络受限），请手动填写');
   await loadLib('jsqr');                       // 确保二维码解码库就绪
@@ -765,36 +777,76 @@ async function processPdf(file, rec) {
   if (pdfWorkerUrl) pl.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   var buf = await readAsArrayBuffer(file);
   var pdf = await pl.getDocument({ data: buf, isEvalSupported: false }).promise;
-  var texts = [], qr = null, pdfItems = null;
+  var pages = [];
   for (var p = 1; p <= pdf.numPages; p++) {
     var page = await pdf.getPage(p);
     var content = await page.getTextContent();
     var str = content.items.map(function (it) { return it.str; }).join(' ');
+    var items = null, qr = null;
     if (flat(str).length < 30) {
+      /* 文字太少（扫描件/图片型）：渲染后扫二维码 + OCR */
       var viewport = page.getViewport({ scale: 2 });
       var canvas = document.createElement('canvas');
       canvas.width = viewport.width; canvas.height = viewport.height;
       var ctx = canvas.getContext('2d');
       ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-      if (!qr) qr = decodeQrCanvas(canvas);     // 先扫二维码
-      try { str = await ocrImage(canvas.toDataURL('image/png'), rec); } catch (e) { str = ''; }
+      try { qr = decodeQrCanvas(canvas); } catch (e) {}
+      try { str = await ocrImage(canvas.toDataURL('image/png'), null); } catch (e) { str = ''; }
     } else {
-      if (!pdfItems) pdfItems = content.items;   // 保留文字层坐标，供版面感知解析（定位销售方/货物名）
-      if (!qr) {                                // 文字够多也单独渲染扫二维码（二维码独立于文字层）
-        try {
-          var vp = page.getViewport({ scale: 1.5 });
-          var cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
-          var cctx = cv.getContext('2d'); cctx.fillStyle = '#fff'; cctx.fillRect(0, 0, cv.width, cv.height);
-          await page.render({ canvasContext: cctx, viewport: vp }).promise;
-          qr = decodeQrCanvas(cv);
-        } catch (e) {}
-      }
+      items = content.items;                      // 保留文字层坐标，供版面感知解析（定位销售方/货物名）
+      try {
+        var vp = page.getViewport({ scale: 1.5 });
+        var cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height;
+        var cctx = cv.getContext('2d'); cctx.fillStyle = '#fff'; cctx.fillRect(0, 0, cv.width, cv.height);
+        await page.render({ canvasContext: cctx, viewport: vp }).promise;
+        qr = decodeQrCanvas(cv);
+      } catch (e) {}
     }
-    texts.push(str);
-    if (qr) break;
+    pages.push({ text: str, items: items, qr: qr });
   }
-  return { text: texts.join('\n'), items: pdfItems, qr: qr };
+  return pages;
+}
+
+/* 精确识别一个 PDF 里的发票数量：按「发票号码 / 票据号码」在全文的位置切分。
+   - 命中 0~1 个号码：视为单张发票（长发票跨多页也合并为一块）。
+   - 命中 ≥2 个号码：每张发票一个块（块文本 = 该号码到下个号码之间），块坐标只在「该页仅此一张」时用于版面感知。 */
+function splitIntoInvoices(pages) {
+  var full = '', marks = [], pageMarks = {};
+  pages.forEach(function (pg, pi) {
+    var t = pg.text || '';
+    var start = full.length;
+    full += t + '\n';
+    pageMarks[pi] = 0;
+    var re = /发票号码[:：]?\s*([0-9]{8,20})|票据号码[:：]?\s*([0-9]{8,20})/g, m;
+    while ((m = re.exec(t)) !== null) {
+      marks.push({ idx: start + m.index, page: pi, number: m[1] || m[2] });
+      pageMarks[pi]++;
+    }
+  });
+  if (marks.length <= 1) {
+    var txt = pages.map(function (pg) { return pg.text || ''; }).join('\n');
+    var its = [];
+    pages.forEach(function (pg) { if (pg.items) its = its.concat(pg.items); });
+    var qr = null;
+    pages.forEach(function (pg) { if (pg.qr && !qr) qr = pg.qr; });
+    return [{ text: txt, items: its, qr: qr, number: marks.length ? marks[0].number : '', useLayout: true }];
+  }
+  var blocks = [];
+  for (var k = 0; k < marks.length; k++) {
+    var a = marks[k].idx;
+    var b = (k + 1 < marks.length) ? marks[k + 1].idx : full.length;
+    var seg = full.slice(a, b);
+    var pg = pages[marks[k].page];
+    blocks.push({
+      text: seg,
+      items: pg ? pg.items : null,
+      qr: pg ? pg.qr : null,
+      number: marks[k].number,
+      useLayout: pageMarks[marks[k].page] === 1   // 该页仅一张发票时坐标才可信
+    });
+  }
+  return blocks;
 }
 
 async function processExcel(file) {
@@ -864,44 +916,84 @@ async function handleFiles(fileList) {
   var files = Array.prototype.slice.call(fileList);
   if (!files.length) { toast('没有选到文件'); return; }
   var accept = ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif', 'doc', 'docx', 'xls', 'xlsx', 'csv'];
-    var lg = loadReimb();
-    var jobs = [], blocked = [], skipped = [];
-    for (var fi = 0; fi < files.length; fi++) {
-      var f = files[fi];
-      var ext = extOf(f.name);
-      if (accept.indexOf(ext) < 0) { skipped.push(f.name); continue; }
-      var hash = await fileHash(f);
-      /* 同一份文件此前已上传过（无论是否导出）-> 弹窗让用户选择 */
-      if (lg.hash[hash]) {
-        if (allowedForce.has(hash)) {
-          /* 本次会话已选过「重新报销」此文件，直接放行 */
-        } else {
-          var dupMsg = '「' + f.name + '」已于 ' + fmtLedgerDate(lg.hash[hash].when) + ' 上传过。是否仍要重新报销？';
-          var goAhead = await showDuplicateModal(dupMsg);
-          if (!goAhead) { blocked.push('「' + f.name + '」已拦截重复上传'); continue; }
-          allowedForce.add(hash);   // 本次放行，processOne 不再按号码二次拦截
-        }
+  var lg = loadReimb();                       // 仅含「已导出」台账
+  var jobs = [], blocked = [], skipped = [], seen = {};
+  for (var fi = 0; fi < files.length; fi++) {
+    var f = files[fi];
+    var ext = extOf(f.name);
+    if (accept.indexOf(ext) < 0) { skipped.push(f.name); continue; }
+    var hash = await fileHash(f);
+    if (seen[hash]) { skipped.push('「' + f.name + '」本批已处理'); continue; }
+    seen[hash] = true;
+    /* 仅与「已导出」台账比对：未导出过（含误删后重新上传）不再拦截 */
+    if (lg.hash[hash]) {
+      if (allowedForce.has(hash)) {
+        /* 本次会话已选过「重新报销」此文件，直接放行 */
+      } else {
+        var dupMsg = '「' + f.name + '」已于 ' + fmtLedgerDate(lg.hash[hash].when) + ' 导出过（文件名『' + lg.hash[hash].fileName + '』）。是否仍要重新报销？';
+        var goAhead = await showDuplicateModal(dupMsg);
+        if (!goAhead) { blocked.push('「' + f.name + '」已拦截重复报销'); continue; }
+        allowedForce.add(hash);
       }
-      /* 记下本次上传：之后不论是否导出，再次上传同一文件都会被拦 */
-      lg.hash[hash] = { when: isoToday(), fileName: f.name };
-      var rec = { id: uid(), fileName: f.name, ext: ext, thumb: '', status: 'ing', error: '排队中', rawText: '', progress: 0, qrOk: false, file: f, hash: hash, number: '' };
-    state.invoices.push(rec);
-    var row = takeBlankRow();
-    row.invId = rec.id;
-    row.summary = baseName(f.name);   // 先占行，保证报销单不为空
-    row.count = 1;
-    jobs.push({ file: f, rec: rec, row: row, ext: ext });
+    }
+    jobs.push({ file: f, hash: hash, ext: ext });
   }
-  saveReimb(lg);
   renderAll();
-  if (skipped.length) toast('忽略不支持的文件：' + skipped.join('、'));
+  if (skipped.length) toast('忽略：' + skipped.join('、'));
   if (blocked.length) toast(blocked.join('；'));
   if (!jobs.length) return;
-  toast('已接收 ' + jobs.length + ' 张，开始识别…（首张需先准备 OCR 组件）');
-  for (var i = 0; i < jobs.length; i++) await processOne(jobs[i]);
+  toast('已接收 ' + jobs.length + ' 个文件，开始识别…（首张需先准备 OCR 组件）');
+  for (var i = 0; i < jobs.length; i++) await processFile(jobs[i]);
   renderAll();
   var okN = state.invoices.filter(function (r) { return r.status === 'ok'; }).length;
   toast('识别完成：成功 ' + okN + ' 张，其余 ' + (state.invoices.length - okN) + ' 张可在表格里手工补填');
+}
+
+/* 一个上传文件 -> 按内容拆成 N 张发票（PDF 精确切分；图片/Word/Excel 通常为 1 张），
+   每张发票各建一个 rec + 一行，识别后自动补位填入报销单。 */
+async function processFile(job) {
+  var f = job.file, ext = job.ext;
+  var blocks;
+  try {
+    if (ext === 'pdf') {
+      var pages = await processPdf(f);
+      blocks = splitIntoInvoices(pages);
+    } else if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif'].indexOf(ext) >= 0) {
+      var dataUrl = await readAsDataURL(f);
+      var iqr = decodeQr(dataUrl);
+      var itext = await ocrImage(dataUrl, null);
+      blocks = [{ text: itext, items: null, qr: iqr, number: '', useLayout: false }];
+    } else if (['xls', 'xlsx', 'csv'].indexOf(ext) >= 0) {
+      blocks = [{ text: await processExcel(f), items: null, qr: null, number: '', useLayout: false }];
+    } else if (['doc', 'docx'].indexOf(ext) >= 0) {
+      blocks = [{ text: await processWord(f), items: null, qr: null, number: '', useLayout: false }];
+    } else {
+      blocks = [];
+    }
+  } catch (e) {
+    var failRec = { id: uid(), fileName: f.name, ext: ext, thumb: '', status: 'todo', error: (e && e.message) ? e.message : '识别失败', rawText: '', progress: 0, qrOk: false, file: f, hash: job.hash, number: '' };
+    if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif'].indexOf(ext) >= 0) { try { failRec.thumb = await readAsDataURL(f); } catch (e2) {} }
+    state.invoices.push(failRec);
+    var frow = takeBlankRow(); frow.invId = failRec.id; frow.summary = baseName(f.name); frow.count = 1;
+    renderAll();
+    return;
+  }
+  if (!blocks.length) return;
+  var n = blocks.length, recs = [];
+  for (var k = 0; k < n; k++) {
+    var b = blocks[k];
+    var rec = {
+      id: uid(),
+      fileName: n > 1 ? (baseName(f.name) + '（' + (k + 1) + '/' + n + '）') : f.name,
+      ext: ext, thumb: '', status: 'ing', error: '排队中', rawText: b.text || '', progress: 0, qrOk: !!(b.qr && b.qr.valid), file: f, hash: job.hash, number: b.number || ''
+    };
+    if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif'].indexOf(ext) >= 0) { try { rec.thumb = await readAsDataURL(f); } catch (e3) {} }
+    state.invoices.push(rec);
+    var row = takeBlankRow(); row.invId = rec.id; row.summary = baseName(rec.fileName); row.count = 1;
+    recs.push({ rec: rec, row: row, block: b });
+  }
+  renderAll();
+  for (var j = 0; j < recs.length; j++) await processOne(recs[j]);
 }
 
 async function processOne(job) {
@@ -909,43 +1001,34 @@ async function processOne(job) {
   rec.status = 'ing'; rec.error = '识别中…';
   renderListThrottled();
   try {
-    var text = '', qr = null, pdfRes = null;
-    if (['jpg', 'jpeg', 'png', 'bmp', 'webp', 'gif'].indexOf(ext) >= 0) {
-      rec.thumb = await readAsDataURL(job.file);
-      renderList();
-      var qrP = decodeQr(rec.thumb);            // 二维码优先（机器读取，最准）
-      text = await ocrImage(rec.thumb, rec);    // OCR 补「销售方 / 项目名称」
-      qr = await qrP;
-    } else if (ext === 'pdf') {
-      pdfRes = await processPdf(job.file, rec);
-      text = pdfRes.text || ''; qr = pdfRes.qr;
-    } else if (['xls', 'xlsx', 'csv'].indexOf(ext) >= 0) {
-      text = await processExcel(job.file);
-    } else if (['doc', 'docx'].indexOf(ext) >= 0) {
-      text = await processWord(job.file);
-    }
-    rec.rawText = text || '';
+    var b = job.block;
+    var text = b.text || '', qr = b.qr, pdfItems = b.items;
+    rec.rawText = text;
     if (qr) rec.qrOk = true;
     var parsed = parseInvoice(text || '');
-    /* 电子发票文字层：用坐标定位销售方/货物名（远准于 OCR，且纯本地） */
-    if (pdfRes && pdfRes.items && pdfRes.items.length) {
-      var lay = parsePdfLayout(pdfRes.items);
-      if (lay.seller) parsed.seller = lay.seller;
-      if (lay.item) parsed.item = lay.item;
+    /* 电子发票文字层：仅当该发票独占一页（坐标可靠）时用坐标定位销售方/货物名；
+       同页多张时坐标会串，依赖文字层解析即可 */
+    if (pdfItems && pdfItems.length && b.useLayout) {
+      var lay = parsePdfLayout(pdfItems);
+      /* 版面感知只补文字层取不到的字段：文字层已取到销售方/货物名就不覆盖，
+         避免坐标误把「开户行账号」当销售方、或把货物名截断。 */
+      if (!parsed.seller && lay.seller) parsed.seller = lay.seller;
+      if (!parsed.item && lay.item) parsed.item = lay.item;
     }
     var data = mergeInvoice(parsed, qr);
     data.vat = detectVat(text, qr);           // 科目：专票/普票（机器优先）
-    rec.number = data.number || '';           // 记住票号，供「重复报销」拦截
-    /* 同一张发票（换了文件再上传）此前已上传过 -> 弹窗让用户选择；
-       否则把票号记进台账（与文件指纹配合，下次任何方式再传都拦） */
+    rec.number = data.number || rec.number || '';
+    /* 重复报销拦截：只比对「已导出」台账的票号；同会话列表里重复同号仅提示，不强制。
+       台账只在导出时由 markExported 写入，上传时不再写 —— 误删后重传不再误报。 */
     if (rec.number && (data.hasCore || data.seller || data.item)) {
       var lg2 = loadReimb();
       var prev = lg2.num[rec.number];
+      var sameInState = state.invoices.some(function (x) { return x.id !== rec.id && x.number === rec.number; });
       if (prev && prev.hash !== rec.hash) {
         if (allowedForce.has(rec.hash)) {
           /* 用户在 handleFiles 已选「重新报销」，本次直接放行 */
         } else {
-          var re2 = await showDuplicateModal('发票（号码 ' + rec.number + '）已于 ' + fmtLedgerDate(prev.when) + ' 上传过（当时文件名『' + prev.fileName + '』）。是否仍要重新报销？');
+          var re2 = await showDuplicateModal('发票（号码 ' + rec.number + '）已于 ' + fmtLedgerDate(prev.when) + ' 导出过（当时文件名『' + prev.fileName + '』）。是否仍要重新报销？');
           if (re2) {
             allowedForce.add(rec.hash);
             lg2.num[rec.number] = { when: isoToday(), fileName: rec.fileName, hash: rec.hash };
@@ -955,9 +1038,8 @@ async function processOne(job) {
             return;
           }
         }
-      } else {
-        lg2.num[rec.number] = { when: (prev && prev.when) || isoToday(), fileName: rec.fileName, hash: rec.hash };
-        saveReimb(lg2);
+      } else if (sameInState) {
+        toast('「' + rec.fileName + '」的发票号码与列表里另一张重复，请核对');
       }
     }
     if (data.hasCore || data.seller || data.item) {
@@ -996,7 +1078,42 @@ function renderListThrottled() {
 /* ==================================================================
  * 八、渲染
  * ================================================================== */
-function renderAll() { renderList(); renderSheet(); updateTotals(); }
+/* 删除发票（与 ✕ 删行一致）：移除发票记录并 splice 对应明细行，自动补位、清除多余空白报销单 */
+function removeInvoice(id) {
+  state.invoices = state.invoices.filter(function (x) { return x.id !== id; });
+  for (var di = state.rows.length - 1; di >= 0; di--) {
+    if (state.rows[di].invId === id) state.rows.splice(di, 1);
+  }
+  if (!state.rows.length) { for (var bi = 0; bi < 5; bi++) state.rows.push(blankRow()); }
+  renderAll();
+}
+
+/* 渲染「已上传发票」详情弹窗：完整文件名 + 状态 + 删除；支持按文件名中文子串搜索 */
+function renderInvoiceDetail() {
+  var ul = $('#invDetailList'); if (!ul) return;
+  var q = ($('#invSearch') && $('#invSearch').value) ? $('#invSearch').value.trim().toLowerCase() : '';
+  var cnt = $('#invDetailCount'); if (cnt) cnt.textContent = state.invoices.length;
+  ul.innerHTML = '';
+  var vis = 0;
+  state.invoices.forEach(function (rec) {
+    if (q && (rec.fileName || '').toLowerCase().indexOf(q) < 0) return;
+    vis++;
+    var li = document.createElement('li');
+    li.className = 'inv-detail-item';
+    var tag = rec.status === 'ok'
+      ? (rec.qrOk ? '<span class="tag ok">二维码已识别</span>' : '<span class="tag ok">已识别</span>')
+      : rec.status === 'ing' ? '<span class="tag ing">识别中</span>'
+      : '<span class="tag bad">待补填</span>';
+    li.innerHTML =
+      '<div class="inv-d-name" title="' + esc(rec.fileName) + '">' + esc(rec.fileName) + '</div>' +
+      '<div class="inv-d-meta">' + tag + '</div>' +
+      '<button class="icon-btn del" type="button" data-del="' + rec.id + '" title="删除">删除</button>';
+    ul.appendChild(li);
+  });
+  var empty = $('#invDetailEmpty'); if (empty) empty.classList.toggle('hidden', vis !== 0);
+}
+
+function renderAll() { renderList(); renderSheet(); updateTotals(); renderInvoiceDetail(); }
 
 function renderList() {
   var ul = $('#invoiceList');
@@ -1067,14 +1184,14 @@ function buildFormHtml(rows, opt) {
   /* 行2 部门 | 报销日期（每张都渲染，绑定同一份共享值） */
   html += '<tr>' +
     '<td class="bx-h" colspan="2">部门：<input class="bx-in bx-line f-dept" type="text" data-k="dept" value="' + esc(state.dept) + '"></td>' +
-    '<td class="bx-h" colspan="11">报销日期：<input class="bx-in f-date" type="text" data-k="date" value="' + esc(state.date) + '" placeholder="按发票开票日期"></td>' +
+    '<td class="bx-h bx-h-right" colspan="11">报销日期：<input class="bx-in f-date" type="text" data-k="date" value="' + esc(state.date) + '" placeholder="按发票开票日期"></td>' +
     '</tr>';
 
   /* 行3-4 表头 */
   html += '<tr>' +
     '<td class="bx-th" colspan="3" rowspan="2">摘要</td>' +
     '<td class="bx-th" colspan="8">金额</td>' +
-    '<td class="bx-th" rowspan="2">科目</td>' +
+    '<td class="bx-th bx-subject" rowspan="2">科目</td>' +
     '<td class="bx-th" rowspan="2">单据<br>张数</td>' +
     '</tr><tr>';
   DIGIT_LABELS.forEach(function (l) { html += '<td class="bx-ths">' + l + '</td>'; });
@@ -1083,7 +1200,7 @@ function buildFormHtml(rows, opt) {
   /* 行5.. 明细（每一行都是可直接输入的实体行，全局下标 = base + 局部下标） */
   rows.forEach(function (row, li) {
     var gi = base + li;
-    html += '<tr class="bx-row">' +
+    html += '<tr class="bx-row" data-r="' + gi + '">' +
       '<td class="bx-summary" colspan="3">' +
       (screen ? '<button class="bx-del screen-only" type="button" data-r="' + gi + '" title="删除本行">✕</button>' : '') +
       '<input class="bx-in" type="text" data-r="' + gi + '" data-k="summary" value="' + esc(row.summary) + '">' +
@@ -1092,7 +1209,7 @@ function buildFormHtml(rows, opt) {
     for (var d = 0; d < 8; d++) {
       html += '<td class="bx-digit"><input class="bx-in" type="text" maxlength="1" inputmode="numeric" data-r="' + gi + '" data-d="' + d + '" value="' + esc(vd[d] || '') + '"></td>';
     }
-    html += '<td>' + '<input class="bx-in" type="text" data-r="' + gi + '" data-k="subject" value="' + esc(row.subject) + '">' + '</td>';
+    html += '<td class="bx-subject">' + '<input class="bx-in" type="text" data-r="' + gi + '" data-k="subject" value="' + esc(row.subject) + '">' + '</td>';
     html += '<td><input class="bx-in bx-incount" type="text" maxlength="3" inputmode="numeric" data-r="' + gi + '" data-k="count" value="' + esc(row.count) + '"></td>';
     html += '</tr>';
   });
@@ -1262,13 +1379,28 @@ function bindSidebar() {
     } else if (el.dataset.del) {
       var id = el.dataset.del;
       var r = state.invoices.filter(function (x) { return x.id === id; })[0];
-      if (r && confirm('删除这张发票？对应的明细行也会清空。')) {
-        state.invoices = state.invoices.filter(function (x) { return x.id !== id; });
-        state.rows.forEach(function (row) { if (row.invId === id) { row.invId = null; row.summary = ''; row.subject = ''; row.count = ''; row.amount = 0; row.digits = emptyDigits(); } });
-        renderAll();
-      }
+      if (r && confirm('删除这张发票？对应的明细行也会一并删除。')) removeInvoice(id);
     }
   });
+
+  $('#invDetailList').addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || !el.dataset) return;
+    if (el.dataset.del) {
+      var id = el.dataset.del;
+      var r = state.invoices.filter(function (x) { return x.id === id; })[0];
+      if (r && confirm('删除这张发票？对应的明细行也会一并删除。')) removeInvoice(id);
+    }
+  });
+  var openD = $('#openInvDetail');
+  if (openD) openD.addEventListener('click', function () {
+    renderInvoiceDetail();
+    $('#invDetailModal').classList.remove('hidden');
+    if ($('#invSearch')) $('#invSearch').value = '';
+  });
+  $$('[data-close-inv]').forEach(function (b) { b.addEventListener('click', function () { $('#invDetailModal').classList.add('hidden'); }); });
+  var ivs = $('#invSearch');
+  if (ivs) ivs.addEventListener('input', renderInvoiceDetail);
 
   $('#clearAll').addEventListener('click', function () {
     if (!state.invoices.length) return;
@@ -1502,7 +1634,7 @@ function buildSheetForForm(rows, label) {
   set(0, 0, '苏州沛斯仁光电科技有限公司费用报销单', { align: 'center', font: { name: '微软雅黑', sz: 16, bold: true } });
   /* 行2 部门 | 报销日期 */
   set(1, 0, '部门：' + (state.dept || ''), { align: 'left' });
-  set(1, 2, '报销日期：' + (state.date || ''), { align: 'left' });
+  set(1, 2, '报销日期：' + (state.date || ''), { align: 'right' });
   /* 行3-4 表头 */
   set(2, 0, '摘要', { align: 'center' });
   set(2, 3, '金额', { align: 'center' });
@@ -1567,8 +1699,40 @@ function buildSheetForForm(rows, label) {
   return ws;
 }
 
+/* 导出前校验：返回仍有问题的明细行（已上传发票但识别为待补填 / 无金额 / 无摘要）。
+   纯手工填写（无 invId）的行不强制，允许用户完全手填。 */
+function problemRows() {
+  var bad = [];
+  state.rows.forEach(function (r, i) {
+    if (!r.invId) return;                 // 手工行不强制
+    var rec = state.invoices.filter(function (x) { return x.id === r.invId; })[0];
+    var badRow = false;
+    if (rec && rec.status === 'todo') badRow = true;        // 识别待补填
+    if (!(num(r.amount) > 0)) badRow = true;                // 无金额
+    if (!r.summary) badRow = true;                          // 无摘要
+    if (badRow) bad.push({ i: i, rec: rec });
+  });
+  return bad;
+}
+/* 导出前检查：有待补填行则标红、滚动到首个问题处并阻止导出；返回 true 表示可继续 */
+function validateBeforeExport() {
+  var bad = problemRows();
+  document.querySelectorAll('.bx-row-bad').forEach(function (el) { el.classList.remove('bx-row-bad'); });
+  if (!bad.length) return true;
+  bad.forEach(function (b) {
+    var tr = document.querySelector('tr.bx-row[data-r="' + b.i + '"]');
+    if (tr) tr.classList.add('bx-row-bad');
+  });
+  var first = bad[0];
+  var ftr = document.querySelector('tr.bx-row[data-r="' + first.i + '"]');
+  if (ftr) ftr.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('有 ' + bad.length + ' 行待补填（已标红），请补全后再导出');
+  return false;
+}
+
 /* Excel 导出（真 .xlsx，含样式）；XLSX_STYLE 不可用时回退 HTML .xls */
 function exportExcel() {
+  if (!validateBeforeExport()) return;
   var forms = formsFromRows();
   if (!forms.length) { toast('没有可导出的报销单'); return; }
   loadLib('xlsxStyle').then(function (ok) {
@@ -1607,6 +1771,7 @@ function excelFallback(forms) {
   toast('已导出 Excel（兼容模式，多张堆叠）');
 }
 function exportWord() {
+  if (!validateBeforeExport()) return;
   var forms = formsFromRows();
   if (!forms.length) { toast('没有可导出的报销单'); return; }
   var parts = forms.map(function (rows) { return officeHtml(rows); });
@@ -1638,6 +1803,7 @@ function captureSheet() {
   });
 }
 function exportImage(kind) {
+  if (!validateBeforeExport()) return;
   captureSheet().then(function (canvas) {
     var name = '费用报销单_' + (state.date || cnDate());
     if (kind === 'png') downloadDataUrl(canvas.toDataURL('image/png'), name + '.png');
@@ -1651,6 +1817,7 @@ function exportImage(kind) {
 }
 /* PDF：每 2 张报销单排在一个 A4 竖版页面的上下半页，等比（contain）缩放并略缩，保证整张表完整显示 */
 function exportPdf() {
+  if (!validateBeforeExport()) return;
   var forms = formsFromRows();
   if (!forms.length) { toast('没有可导出的报销单'); return; }
   var fixedPx = 794;
@@ -1689,6 +1856,7 @@ function exportPdf() {
 
 /* 打印：专用打印区，每页上下两张报销单（与 PDF 一致的 2-up 版式） */
 function doPrint() {
+  if (!validateBeforeExport()) return;
   markExported();
   var pa = $('#printArea');
   if (pa) {

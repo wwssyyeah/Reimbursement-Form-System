@@ -79,6 +79,7 @@ body{
 .tag.ing{background:#fff4e0;color:#b9740a}
 .tag.err{background:#fdecec;color:var(--danger)}
 .tag.ok{background:#e9f8ee;color:var(--ok)}
+.tag.bad{background:#fdecec;color:var(--danger)}
 .inv-item .ops{display:flex;flex-direction:column;gap:4px}
 .icon-btn{border:1px solid var(--line);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;padding:3px 8px;color:var(--ink);white-space:nowrap}
 .icon-btn:hover{border-color:var(--brand);color:var(--brand)}
@@ -117,6 +118,11 @@ body{
 .bx-table tr:last-child td{border-bottom:1px solid var(--grid)}
 .bx-title{font-size:20px;font-weight:700;letter-spacing:0;white-space:nowrap;padding:10px 0 !important;text-align:center;overflow:hidden}
 .bx-h{text-align:left !important;font-weight:600;font-size:13.5px;padding:7px 9px !important;white-space:nowrap}
+/* 报销日期 靠右对齐（仅该行，部门仍靠左） */
+.bx-h.bx-h-right{text-align:right !important}
+/* 科目 一列居中（表头与数据格统一） */
+.bx-subject{text-align:center !important}
+.bx-subject .bx-in{text-align:center}
 .bx-th{background:#f2f5fa;font-weight:600;line-height:1.35}
 .bx-ths{background:#f2f5fa;font-weight:600;font-size:12px;padding:3px 0 !important}
 .bx-summary{text-align:left !important;padding:3px 4px !important}
@@ -203,6 +209,21 @@ body.capturing .sheet{border:none !important;box-shadow:none !important;border-r
   #printArea .bx-table td{font-size:13px;padding:5px 4px}
   #printArea .bx-title{font-size:18pt;font-weight:700;letter-spacing:0;white-space:nowrap;padding:10px 0 !important;text-align:center}
   #printArea .bx-h{text-align:left !important;font-size:13px;padding:7px 9px !important}
+  #printArea .bx-h.bx-h-right{text-align:right !important}
+  #printArea .bx-subject{text-align:center !important}
   #printArea .bx-tl{text-align:left !important;font-size:13px;padding:6px 8px !important}
   #printArea .bx-sign td{font-size:12px;padding:8px 4px !important}
 }
+
+/* ---------- 已上传发票详情弹窗 + 搜索 ---------- */
+.inv-search{width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--line);border-radius:9px;font-size:13px;outline:none}
+.inv-search:focus{border-color:var(--brand)}
+.inv-detail-list{list-style:none;margin:0;padding:4px 2px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:8px}
+.inv-detail-item{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}
+.inv-detail-item .inv-d-name{flex:1;min-width:0;font-size:13px;font-weight:600;word-break:break-all;line-height:1.45}
+.inv-detail-item .inv-d-meta{flex:none}
+.inv-detail-empty{color:var(--muted);font-size:13px;text-align:center;padding:14px 0}
+
+/* ---------- 导出时待补填行标红 ---------- */
+tr.bx-row-bad>td{background:#ffe9e9 !important}
+tr.bx-row-bad{outline:2px solid #e23b3b}
