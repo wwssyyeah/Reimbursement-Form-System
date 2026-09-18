@@ -120,6 +120,8 @@ body{
 .bx-h{text-align:left !important;font-weight:600;font-size:13.5px;padding:7px 9px !important;white-space:nowrap}
 /* 报销日期 靠右对齐（仅该行，部门仍靠左） */
 .bx-h.bx-h-right{text-align:right !important}
+/* 部门 与 报销日期 之间不画竖向隔离线（位置不变，仍分占 B:C / D:N），!important 同时覆盖导出表的行内左边框 */
+.bx-nol{border-left:none !important}
 /* 科目 一列居中（表头与数据格统一） */
 .bx-subject{text-align:center !important}
 .bx-subject .bx-in{text-align:center}

@@ -1103,7 +1103,7 @@ async function processOne(job) {
     }
     if (data.hasCore || data.seller || data.item) {
       applyMerged(job.row, data);
-      if (data.date) state.date = normDate(data.date);   // 报销日期：按发票开票日期填写
+      // 报销日期不再跟随发票开票日期：保持 init() 写入的实时（当天）日期，用户也可手动改
       if (num(job.row.amount) > MAX_GRID) {
         toast('「' + rec.fileName + '」金额超过 999,999.99，分格只显示到十万位，合计仍按真实金额计算');
       }
@@ -1243,7 +1243,7 @@ function buildFormHtml(rows, opt) {
   /* 行2 部门 | 报销日期（每张都渲染，绑定同一份共享值） */
   html += '<tr>' +
     '<td class="bx-h" colspan="2">部门：<input class="bx-in bx-line f-dept" type="text" data-k="dept" value="' + esc(state.dept) + '"></td>' +
-    '<td class="bx-h bx-h-right" colspan="11">报销日期：<input class="bx-in f-date" type="text" data-k="date" value="' + esc(state.date) + '" placeholder="按发票开票日期"></td>' +
+    '<td class="bx-h bx-h-right bx-nol" colspan="11">报销日期：<input class="bx-in f-date" type="text" data-k="date" value="' + esc(state.date) + '" placeholder="默认当天日期"></td>' +
     '</tr>';
 
   /* 行3-4 表头 */
