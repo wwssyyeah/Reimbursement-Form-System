@@ -501,7 +501,7 @@ function parseInvoice(text) {
  * （x 大于「销售方」标签的 x）。纯本地、不联网、比 OCR 准确得多。
  * ================================================================== */
 function parsePdfLayout(items) {
-  var res = { seller: '', item: '' };
+  var res = { seller: '', item: '', buyer: '' };
   if (!items || !items.length) return res;
   var its = [];
   items.forEach(function (it) {
@@ -532,39 +532,90 @@ function parsePdfLayout(items) {
   if (sx !== null) {
     /* 销售方在右侧栏：取 x 大于标签且最靠右的「公司类」主体；无则退而取最靠右候选 */
     var right = cands.filter(function (c) { return c.x > sx - 6; });
+    var left = cands.filter(function (c) { return c.x <= sx - 6; });
     var corp = right.filter(function (c) { return /(公司|集团|事务所|中心|学校|医院|厂|店|商行|合作社|科技|实业|工作室|有限责任公司)$/.test(c.name); });
     if (corp.length) res.seller = corp[corp.length - 1].name;
     else if (right.length) res.seller = right[right.length - 1].name;
+    /* 左侧栏是「购买方信息」：文字层读取顺序错乱时可能误把买方当销售方，留给上层纠正 */
+    if (left.length) res.buyer = left[left.length - 1].name;
+  }
+  if (sx === null && cands.length) {
+    /* 部分数电票不印「销售方」文字标签：改为按分栏判断——最右的主体是销售方，最左的是购买方。
+       （购买方在左栏、销售方在右栏是数电票的固定版面） */
+    var corpRe2 = /(公司|集团|事务所|中心|学校|医院|厂|店|商行|合作社|科技|实业|工作室|有限责任公司)$/;
+    var byX = cands.slice().sort(function (a, b) { return a.x - b.x; });
+    var corp2 = byX.filter(function (c) { return corpRe2.test(c.name); });
+    var pick = corp2.length ? corp2 : byX;
+    if (pick.length > 1) res.buyer = pick[0].name;
+    res.seller = pick[pick.length - 1].name;
   }
   if (!res.seller && cands.length) res.seller = cands[cands.length - 1].name;
 
   /* 发票内容：取「*类别*名称」第二个 * 之后的内容。
-     货物行在 PDF 里通常是独立文字项，先逐项匹配（最准）；不中再把文字项拼起来匹配；
-     仍不中才用坐标兜底（「项目名称」表头正下方最左的那段文字）。
+     货物行在 PDF 里通常是独立文字项，先逐项匹配（最准）；同时用坐标把同一列被
+     「单元格内换行」拆开的字拼回一份（可修复「光学玻」→「光学玻璃」这类断字）；
+     仍不中再把文字项整体拼起来匹配。
      全程不退回“表头邻格”取词，避免把「规格型号」写进摘要。 */
   var all = its.map(function (it) { return it.s; }).join('');
   var got = '';
   for (var gi = 0; gi < its.length && !got; gi++) got = extractGoodsName(its[gi].s);
+  /* 单元格内换行会把货物名切成多个文字项（如「*非金属矿物制品*光学玻」+ 下一行的「璃」），
+     逐项匹配只能拿到前半截。用坐标把同一列被换行拆开的字拼回来；拼回的结果更长、
+     且以逐项结果开头时，判为「断字」并采用完整名（否则维持逐项结果，避免坐标误取）。 */
+  var col = goodsNameByCoord(its);
+  if (col && (!got || (col.indexOf(got) === 0 && col.length > got.length))) got = col;
   if (!got) got = extractGoodsName(all);
-  if (!got) got = goodsNameByCoord(its);
   res.item = got;
   return res;
 }
 
-/* 坐标兜底：发票「项目名称」表头正下方、最靠左的一段文字即货物或服务名称 */
+/* 坐标定位货物名，并把单元格内「换行断字」拼回来。
+   发票「项目名称」是明细表最左一列：先取表头正下方最上一行、最靠左的文字项作锚点
+   （数量/单价/金额等都在它右边，不会被误取）；再沿**同一列**（x 相同）向下逐行拼接，
+   直到遇到下一行商品名（以 * 开头）或行距突然变大为止。
+   例：`*非金属矿物制品*光学玻` + 下一行 `璃` → 「*非金属矿物制品*光学玻璃」→ 光学玻璃。 */
 function goodsNameByCoord(its) {
   var hdr = null;
   its.forEach(function (it) {
     if (/(货物或应税劳务|服务名称|项目名称)/.test(it.s)) { if (!hdr || it.y > hdr.y) hdr = it; }
   });
   if (!hdr) return '';
-  var cand = its.filter(function (it) {
-    return it.y < hdr.y - 0.5 && it.y > hdr.y - 24 &&
+  /* 表头正下方一段范围内的候选（表头词如「规格型号/单位/数量」已挡掉） */
+  var below = its.filter(function (it) {
+    return it.y < hdr.y - 0.5 && it.y > hdr.y - 30 &&
       /[一-龥A-Za-z]/.test(it.s) && !isHeaderWord(it.s);
   });
-  if (!cand.length) return '';
-  cand.sort(function (a, b) { return a.x - b.x; });
-  var nm = extractGoodsName(cand[0].s) || cand[0].s.replace(/^[*＊※\s]+/, '').trim();
+  if (!below.length) return '';
+  /* 锚点 = 最上一行里最靠左的项 */
+  var topY = below[0].y;
+  below.forEach(function (it) { if (it.y > topY) topY = it.y; });
+  var row1 = below.filter(function (it) { return Math.abs(it.y - topY) <= 6; });
+  row1.sort(function (a, b) { return a.x - b.x; });
+  var anchor = row1[0];
+
+  /* 同列（跨页会重复出现同样的文字项，故下面按 y 逐行去重） */
+  var col = its.filter(function (it) {
+    return Math.abs(it.x - anchor.x) <= 4 && it.y < anchor.y - 0.5 && /[一-龥A-Za-z0-9]/.test(it.s);
+  }).sort(function (a, b) { return b.y - a.y; });
+
+  /* 行高：取该列相邻两项的最小正行距（>3 以避开同一行内的细微 y 偏差），默认 13 */
+  var lineH = 13;
+  for (var i = 1; i < col.length; i++) {
+    var d = col[i - 1].y - col[i].y;
+    if (d > 3 && d < lineH) lineH = d;
+  }
+
+  var parts = [anchor.s], prevY = anchor.y;
+  for (var k = 0; k < col.length && parts.length < 4; k++) {
+    var it = col[k];
+    if (it.y > prevY - 2) continue;                        // 同一条水平线（跨页重复/同行其他项）→ 跳过
+    if (prevY - it.y > lineH * 1.6) break;                 // 行距骤增 → 已跨到别的行
+    if (/^[*＊※]/.test(it.s.replace(/^\s+/, ''))) break;   // 下一行商品名 → 停止
+    if (isHeaderWord(it.s)) break;
+    parts.push(it.s); prevY = it.y;
+  }
+  var joined = parts.join('');
+  var nm = extractGoodsName(joined) || joined.replace(/^[*＊※\s]+/, '').trim();
   return isHeaderWord(nm) ? '' : nm;
 }
 
@@ -1013,7 +1064,15 @@ async function processOne(job) {
       /* 版面感知只补文字层取不到的字段：文字层已取到销售方/货物名就不覆盖，
          避免坐标误把「开户行账号」当销售方、或把货物名截断。 */
       if (!parsed.seller && lay.seller) parsed.seller = lay.seller;
-      if (!parsed.item && lay.item) parsed.item = lay.item;
+      /* 文字层读取顺序错乱时可能把「购买方」当成销售方（摘要把买方写进去）；
+         坐标层能分清左右两栏，故此时以坐标层为准。 */
+      if (lay.seller && lay.buyer && parsed.seller === lay.buyer && parsed.seller !== lay.seller) parsed.seller = lay.seller;
+      if (!parsed.item) parsed.item = lay.item;
+      else if (lay.item && lay.item.indexOf(parsed.item) === 0 && lay.item.length > parsed.item.length) {
+        /* 货物名在单元格里换行时，文字层会把名字截断（如「光学玻」），
+           坐标层拼回的完整名是它的延长 → 以完整名为准。 */
+        parsed.item = lay.item;
+      }
     }
     var data = mergeInvoice(parsed, qr);
     data.vat = detectVat(text, qr);           // 科目：专票/普票（机器优先）
